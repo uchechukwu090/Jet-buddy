@@ -1,0 +1,14 @@
+fastapi
+uvicorn[standard]
+requests
+apscheduler
+pydantic-settings
+python-dotenv
+twelvedata
+
+# Core ML & Data Libraries
+numpy
+pandas
+scikit-learn
+PyWavelets
+pykalman
