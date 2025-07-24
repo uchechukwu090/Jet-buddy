@@ -4,7 +4,7 @@
 # --- Description:
 # Implements the TimeEstimationModule. It calculates candle velocity to estimate
 # time to reach certain price zones, like an entry or a take-profit level.
-
+import pandas as pd
 import numpy as np
 
 def estimate_time_and_volatility(ohlcv_df: pd.DataFrame, entry_zone: Optional[str]) -> dict:
