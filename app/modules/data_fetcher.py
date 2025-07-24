@@ -7,7 +7,7 @@
 
 import requests
 import pandas as pd
-from typing import Optional
+from typing import Optional, List, Dict, Union
 from datetime import datetime, timedelta
 from app.config import settings
 
