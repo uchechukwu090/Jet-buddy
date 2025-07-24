@@ -7,6 +7,7 @@
 # with a Kalman Filter to identify the underlying trend.
 
 import numpy as np
+import pandas as pd
 import pywt
 from pykalman import KalmanFilter
 
