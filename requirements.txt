@@ -3,6 +3,7 @@ uvicorn[standard]
 requests
 apscheduler
 pydantic-settings
+pydantic[email]
 python-dotenv
 twelvedata
 
