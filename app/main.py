@@ -75,29 +75,86 @@ def run_full_analysis(symbol: str):
 
 
 # --- Scheduler Setup ---
-scheduler = AsyncIOScheduler()
+scheduler = AsyncIOScheduler(timezone="UTC")
 
-# Define the list of symbols to track. Can be moved to config.
-SYMBOLS_TO_TRACK = ["AAPL", "TSLA", "GOOGL", "EUR/USD"] # Example symbols
+def scheduled_analysis_job():
+    """Job that runs analysis for all symbols in the user watchlist."""
+    print(f"Scheduler triggered: Starting analysis for all watchlist symbols.")
+    symbols_to_run = get_unique_symbols_from_watchlist()
+    if not symbols_to_run:
+        print("Watchlist is empty. Skipping scheduled run.")
+        return
+    for symbol in symbols_to_run:
+        # Using background tasks to run analyses concurrently
+        # This is a placeholder; a more robust solution might use a task queue
+        run_full_analysis(symbol)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # On startup
-    print("Starting Jet Buddy Trading Engine...")
-    init_cache()
+    print("Starting Jet Buddy Engine...")
+    init_db()
+    
+    # ADJUSTMENT 1: Use cron triggers for major market sessions
     scheduler.add_job(
-        lambda: [run_full_analysis(s) for s in SYMBOLS_TO_TRACK],
-        'interval', 
-        minutes=settings.schedule_minutes,
-        id="analysis_job"
+        scheduled_analysis_job, 
+        'cron', 
+        hour=6, 
+        minute=55, 
+        id="pre_london_run",
+        name="Run analysis before London open"
     )
+    scheduler.add_job(
+        scheduled_analysis_job, 
+        'cron', 
+        hour=12, 
+        minute=55, 
+        id="pre_ny_run",
+        name="Run analysis before New York open"
+    )
+    scheduler.add_job(
+        scheduled_analysis_job, 
+        'cron', 
+        hour=22, 
+        minute=55, 
+        id="pre_asian_run",
+        name="Run analysis before Asian open"
+    )
+    
     scheduler.start()
-    print(f"Scheduler started. Will analyze {SYMBOLS_TO_TRACK} every {settings.schedule_minutes} minutes.")
+    print("Scheduler started with session-based cron jobs (times are in UTC).")
     yield
-    # On shutdown
-    print("Shutting down scheduler...")
     scheduler.shutdown()
 
+# --- FastAPI App ---
+app = FastAPI(lifespan=lifespan, title="Jet Buddy Trading Engine")
+
+# --- API Endpoints (Unchanged) ---
+@app.post("/watchlist/add", status_code=201, tags=["Watchlist"])
+def add_symbol_to_watchlist(item: WatchlistAddItem, background_tasks: BackgroundTasks):
+    normalized = normalize_symbol(item.symbol)
+    add_to_watchlist(item.symbol, normalized, item.email)
+    background_tasks.add_task(run_full_analysis, normalized)
+    return {"message": f"'{item.symbol}' (as '{normalized}') added to watchlist. Analysis triggered."}
+
+@app.get("/watchlist", response_model=List[WatchlistItem], tags=["Watchlist"])
+def get_watchlist():
+    return get_full_watchlist()
+
+@app.delete("/watchlist/remove/{item_id}", status_code=200, tags=["Watchlist"])
+def remove_symbol_from_watchlist(item_id: int):
+    remove_from_watchlist(item_id)
+    return {"message": f"Item {item_id} removed from watchlist."}
+
+@app.get("/analyze/{symbol}", response_model=AnalysisOutput, tags=["Analysis"])
+async def get_analysis(symbol: str):
+    normalized_symbol = normalize_symbol(symbol)
+    cached_data = get_cached_analysis(normalized_symbol)
+    if not cached_data:
+        raise HTTPException(
+            status_code=404, 
+            detail=f"Analysis for '{symbol}' not found. Add it to the watchlist to generate a report."
+        )
+    return AnalysisOutput(**cached_data)
 
 # --- FastAPI App ---
 app = FastAPI(lifespan=lifespan)
