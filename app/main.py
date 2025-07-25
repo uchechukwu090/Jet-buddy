@@ -12,6 +12,7 @@ import os
 # Import all modules and components
 from app.config import settings
 from app.models import AnalysisOutput
+from app.modules import WatchlistAddItem
 from app.caching import init_cache, set_cached_analysis, get_cached_analysis
 
 from app.modules import data_fetcher
@@ -21,7 +22,7 @@ from app.modules import sentiment_engine
 from app.modules import time_engine
 from app.modules import aggregator
 from app.modules import risk_engine
-from app.modules import WatchlistAddItem
+
 
 # --- Analysis Pipeline ---
 def run_full_analysis(symbol: str):
