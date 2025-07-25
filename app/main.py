@@ -21,6 +21,7 @@ from app.modules import sentiment_engine
 from app.modules import time_engine
 from app.modules import aggregator
 from app.modules import risk_engine
+from app.modules import WatchlistAddItem
 
 # --- Analysis Pipeline ---
 def run_full_analysis(symbol: str):
