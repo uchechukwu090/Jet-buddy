@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 import os
 # Import all modules and components
 from app.config import settings
-from app.modules import AnalysisOutput,WatchlistAddItem, WatchlistItem
+from app.models import AnalysisOutput,WatchlistAddItem, WatchlistItem
 from app.caching import init_cache, set_cached_analysis, get_cached_analysis
 
 from app.modules import data_fetcher
