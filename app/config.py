@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     smtp_port: int
     smtp_username: str
     sender_email: str
-    smtp_password:
+    smtp_password: str
 
     class Config:
         env_file = ".env"
