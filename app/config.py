@@ -6,6 +6,7 @@
 
 import os
 from pydantic_settings import BaseSettings
+from typing import List
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -13,18 +14,18 @@ load_dotenv()
 class Settings(BaseSettings):
     """ Manages application configuration. """
     # API Keys & Limits
-    finnhub_api_key: str = os.getenv("FINNHUB_API_KEY")
-    twelvedata_api_key: str = os.getenv("TWELVEDATA_API_KEY")
-    newsdata_api_key: str = os.getenv("NEWSDATA_API_KEY")
-    openrouter_api_key: str = os.getenv("OPENROUTER_API_KEY")
+    finnhub_api_key: str
+    twelvedata_api_key: str
+    newsdata_api_key: str 
+    openrouter_api_key: str
     finnhub_rate_limit: int = 25
 
     # Email Settings
-    smtp_server: str = os.getenv("SMTP_SERVER")
-    smtp_port: int = os.getenv("SMTP_PORT")
-    smtp_username: str = os.getenv("SMTP_USERNAME")
-    sender_email: str = os.getenv("SENDER_EMAIL")
-    smtp_password: str = os.getenv("SMTP_PASSWORD")
+    smtp_server: str =
+    smtp_port: int =
+    smtp_username: str
+    sender_email: str
+    smtp_password:
 
     class Config:
         env_file = ".env"
