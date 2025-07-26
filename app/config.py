@@ -21,8 +21,8 @@ class Settings(BaseSettings):
     finnhub_rate_limit: int = 25
 
     # Email Settings
-    smtp_server: str =
-    smtp_port: int =
+    smtp_server: str
+    smtp_port: int
     smtp_username: str
     sender_email: str
     smtp_password:
