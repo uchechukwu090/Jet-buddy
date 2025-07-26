@@ -6,13 +6,18 @@
 # endpoints, and orchestrates the analysis pipeline and scheduling.
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi.requests import Request
+from fastapi.responses import JSONResponse
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from contextlib import asynccontextmanager
 import os
 # Import all modules and components
 from app.config import settings
 from app.models import AnalysisOutput,WatchlistAddItem, WatchlistItem
+from typing import List, Dict, Optional, Union
+from datetime import datetime
 from app.caching import init_cache, set_cached_analysis, get_cached_analysis
+from app.config import settings
 
 from app.modules import data_fetcher
 from app.modules import trend_engine
@@ -89,6 +94,24 @@ def scheduled_analysis_job():
         # Using background tasks to run analyses concurrently
         # This is a placeholder; a more robust solution might use a task queue
         run_full_analysis(symbol)
+def normalize_symbol(symbol: str) -> str:
+    return symbol.replace("/", "").upper()
+
+def add_to_watchlist(symbol: str, normalized: str, email: str):
+    # placeholder logic (e.g., store in memory or SQLite)
+    pass
+
+def get_full_watchlist() -> List[WatchlistItem]:
+    # return mock data or fetch from DB/cache
+    return []
+
+def remove_from_watchlist(item_id: int):
+    # delete symbol logic
+    pass
+
+def init_db():
+    print("DB init logic placeholder.")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -147,25 +170,6 @@ def remove_symbol_from_watchlist(item_id: int):
     return {"message": f"Item {item_id} removed from watchlist."}
 
 @app.get("/analyze/{symbol}", response_model=AnalysisOutput, tags=["Analysis"])
-async def get_analysis(symbol: str):
-    normalized_symbol = normalize_symbol(symbol)
-    cached_data = get_cached_analysis(normalized_symbol)
-    if not cached_data:
-        raise HTTPException(
-            status_code=404, 
-            detail=f"Analysis for '{symbol}' not found. Add it to the watchlist to generate a report."
-        )
-    return AnalysisOutput(**cached_data)
-
-# --- FastAPI App ---
-app = FastAPI(lifespan=lifespan)
-
-@app.get("/", tags=["Status"])
-def read_root():
-    """Root endpoint providing system status."""
-    return {"message": f"Welcome to the {settings.app_name}", "status": "running"}
-
-@app.get("/analyze/{symbol}", response_model=AnalysisOutput, tags=["Analysis"])
 async def get_analysis(symbol: str, background_tasks: BackgroundTasks):
     """
     Retrieves the latest cached analysis for a symbol.
@@ -197,3 +201,11 @@ async def force_run_analysis(symbol: str, background_tasks: BackgroundTasks):
     symbol = symbol.upper()
     background_tasks.add_task(run_full_analysis, symbol)
     return {"message": f"A new analysis for {symbol} has been triggered in the background."}
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "An unexpected error occurred."}
+    )
+
