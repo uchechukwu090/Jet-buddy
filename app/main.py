@@ -6,6 +6,15 @@
 # endpoints, and orchestrates the analysis pipeline and scheduling.
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 from fastapi.requests import Request
 from fastapi.responses import JSONResponse
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -201,6 +210,10 @@ async def force_run_analysis(symbol: str, background_tasks: BackgroundTasks):
     symbol = symbol.upper()
     background_tasks.add_task(run_full_analysis, symbol)
     return {"message": f"A new analysis for {symbol} has been triggered in the background."}
+
+@app.get("/")
+def root():
+    return {"status": "Jet Buddy is running!"}
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
