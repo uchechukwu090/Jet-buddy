@@ -81,6 +81,10 @@ def run_full_analysis(symbol: str):
     set_cached_analysis(symbol, final_output)
     print(f"[{datetime.now()}] Analysis for {symbol} complete and cached.")
 
+# Dynamic cors for multiple domain
+def get_cors_origins():
+    origins = os.getenv("CORS_ALLOW_ORIGINS", "*")
+    return [origin.strip() for origin in origins.split(",")]
 
 # --- Scheduler Setup ---
 scheduler = AsyncIOScheduler(timezone="UTC")
@@ -152,14 +156,10 @@ async def lifespan(app: FastAPI):
     scheduler.shutdown()
 
 # --- FastAPI App ---
-app = FastAPI(
-    lifespan=lifespan,
-    title="Jet Buddy Trading Engine"
-)
-
+app = FastAPI(lifespan=lifespan, title="Jet Buddy Trading Engine")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://9fcb73c8-5bbb-4200-a5b9-3f3dd8635e07.canvases.tempo.build"],
+    allow_origins=get_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
