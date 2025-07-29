@@ -20,17 +20,11 @@ from typing import List, Dict, Optional, Union
 from datetime import datetime
 from app.caching import init_cache, set_cached_analysis, get_cached_analysis
 from app.config import settings
-from app.database import get_email_by_symbol
 from app.email_sender import send_signal_email
-
-from app.modules import data_fetcher
-from app.modules import trend_engine
-from app.modules import smc_engine
-from app.modules import sentiment_engine
-from app.modules import time_engine
-from app.modules import aggregator
-from app.modules import risk_engine
-
+from app.database import (init_db, set_cached_analysis, get_cached_analysis, add_to_watchlist, remove_from_watchlist, get_full_watchlist, get_unique_symbols_from_watchlist, get_emails_for_symbol)
+from app.symbol_normalizer import normalize_symbol
+from app.email_sender import send_email_report
+from app.modules import (data_fetcher, trend_engine, smc_engine, sentiment_engine, tp_engine, time_engine, aggregator, risk_engine)
 
 # --- Analysis Pipeline ---
 def run_full_analysis(symbol: str):
@@ -123,37 +117,15 @@ def init_db():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Handles application startup and shutdown logic."""
     print("Starting Jet Buddy Engine...")
     init_db()
-    init_cache()
-    # ADJUSTMENT 1: Use cron triggers for major market sessions
-    scheduler.add_job(
-        scheduled_analysis_job, 
-        'cron', 
-        hour=6, 
-        minute=55, 
-        id="pre_london_run",
-        name="Run analysis before London open"
-    )
-    scheduler.add_job(
-        scheduled_analysis_job, 
-        'cron', 
-        hour=12, 
-        minute=55, 
-        id="pre_ny_run",
-        name="Run analysis before New York open"
-    )
-    scheduler.add_job(
-        scheduled_analysis_job, 
-        'cron', 
-        hour=22, 
-        minute=55, 
-        id="pre_asian_run",
-        name="Run analysis before Asian open"
-    )
-    
+    # Add cron jobs for market sessions (unchanged)
+    scheduler.add_job(scheduled_analysis_job, 'cron', hour=6, minute=55, id="pre_london")
+    scheduler.add_job(scheduled_analysis_job, 'cron', hour=12, minute=55, id="pre_ny")
+    scheduler.add_job(scheduled_analysis_job, 'cron', hour=22, minute=55, id="pre_asian")
     scheduler.start()
-    print("Scheduler started with session-based cron jobs (times are in UTC).")
+    print("Scheduler started with session-based cron jobs (UTC).")
     yield
     scheduler.shutdown()
 
@@ -167,7 +139,50 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# --- NEW ENDPOINTS (FIX #1 and #4) ---
+@app.get("/market-data/{symbol}", tags=["On-Demand Data"])
+async def get_market_data(symbol: str):
+    """
+    [FIX #1] Fetches and returns raw OHLCV market data for a given symbol,
+    using the robust fallback logic.
+    """
+    normalized_symbol = normalize_symbol(symbol)
+    try:
+        df, note = data_fetcher.get_ohlcv_data(normalized_symbol)
+        if df is None:
+            raise HTTPException(status_code=404, detail=f"Market data not available for '{normalized_symbol}'.")
+        
+        # Convert DataFrame to a JSON-friendly format
+        df_reset = df.reset_index()
+        json_output = json.loads(df_reset.to_json(orient="records", date_format="iso"))
+        
+        return {"symbol": normalized_symbol, "source": note, "data": json_output}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/sentiment/{symbol}", tags=["On-Demand Data"])
+async def get_sentiment(symbol: str):
+    """
+    [FIX #4] Fetches and returns news-based sentiment analysis for a given symbol.
+    """
+    normalized_symbol = normalize_symbol(symbol)
+    try:
+        # The sentiment engine already uses Newsdata.io with a keyword fallback
+        sentiment_result = sentiment_engine.analyze_sentiment(normalized_symbol)
+        if "error" in sentiment_result:
+             raise HTTPException(status_code=500, detail=sentiment_result["error"])
+        
+        return {
+            "symbol": normalized_symbol,
+            "dominant_sentiment": sentiment_result.get("sentiment"),
+            "confidence": sentiment_result.get("confidence"),
+            "source": "Newsdata.io with LLM/Keyword analysis"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 # --- API Endpoints (Unchanged) ---
+
 @app.post("/watchlist/add", status_code=201, tags=["Watchlist"])
 def add_symbol_to_watchlist(item: WatchlistAddItem, background_tasks: BackgroundTasks):
     normalized = normalize_symbol(item.symbol)
@@ -231,7 +246,6 @@ def check_cache():
         return {"status": "ok", "message": "Cache initialized successfully."}
     except Exception as e:
         return {"status": "error", "message": str(e)}
-
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
