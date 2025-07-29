@@ -20,6 +20,8 @@ from typing import List, Dict, Optional, Union
 from datetime import datetime
 from app.caching import init_cache, set_cached_analysis, get_cached_analysis
 from app.config import settings
+from app.database import get_email_by_symbol
+from app.email_sender import send_signal_email
 
 from app.modules import data_fetcher
 from app.modules import trend_engine
@@ -206,14 +208,17 @@ async def get_analysis(symbol: str, background_tasks: BackgroundTasks):
             detail=f"Analysis for {symbol} is not yet available. It has been scheduled. Please check back in a few minutes."
         )
 
-@app.post("/analyze/force-run/{symbol}", tags=["Analysis"])
-async def force_run_analysis(symbol: str, background_tasks: BackgroundTasks):
-    """
-    Forces an immediate re-analysis of a symbol in the background.
-    """
-    symbol = symbol.upper()
-    background_tasks.add_task(run_full_analysis, symbol)
-    return {"message": f"A new analysis for {symbol} has been triggered in the background."}
+@app.post("/analyze/force-run/{symbol}")
+def force_run_analysis(symbol: str):
+    normalized = normalize_symbol(symbol)
+    result = analyze_symbol(normalized)  # your existing analysis function
+
+    # Fetch email from watchlist
+    email = get_email_by_symbol(normalized)
+    if email:
+        send_signal_email(to_email=email, symbol=normalized, analysis_data=result)
+    
+    return result
 
 @app.get("/")
 def root():
