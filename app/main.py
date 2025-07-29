@@ -8,13 +8,6 @@
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 app = FastAPI()
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 from fastapi.requests import Request
 from fastapi.responses import JSONResponse
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -159,7 +152,18 @@ async def lifespan(app: FastAPI):
     scheduler.shutdown()
 
 # --- FastAPI App ---
-app = FastAPI(lifespan=lifespan, title="Jet Buddy Trading Engine")
+app = FastAPI(
+    lifespan=lifespan,
+    title="Jet Buddy Trading Engine"
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://9fcb73c8-5bbb-4200-a5b9-3f3dd8635e07.canvases.tempo.build"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # --- API Endpoints (Unchanged) ---
 @app.post("/watchlist/add", status_code=201, tags=["Watchlist"])
