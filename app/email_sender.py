@@ -6,7 +6,7 @@
 
 import smtplib
 from email.mime.multipart import MIMEMultipart
-from typing import List
+from typing import List, Dict, Optional
 from email.mime.text import MIMEText
 from app.config import settings
 from app.models import AnalysisOutput
