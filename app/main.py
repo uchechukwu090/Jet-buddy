@@ -123,7 +123,7 @@ def init_db():
 async def lifespan(app: FastAPI):
     print("Starting Jet Buddy Engine...")
     init_db()
-    
+    init_cache()
     # ADJUSTMENT 1: Use cron triggers for major market sessions
     scheduler.add_job(
         scheduled_analysis_job, 
@@ -218,6 +218,15 @@ async def force_run_analysis(symbol: str, background_tasks: BackgroundTasks):
 @app.get("/")
 def root():
     return {"status": "Jet Buddy is running!"}
+
+@app.get("/health/cache")
+def check_cache():
+    try:
+        init_cache()
+        return {"status": "ok", "message": "Cache initialized successfully."}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
