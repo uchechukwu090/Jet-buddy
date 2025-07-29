@@ -20,7 +20,7 @@ from typing import List, Dict, Optional, Union
 from datetime import datetime
 from app.caching import init_cache, set_cached_analysis, get_cached_analysis
 from app.config import settings
-from app.database import (init_db, set_cached_analysis, get_cached_analysis, add_to_watchlist, remove_from_watchlist, get_full_watchlist, get_unique_symbols_from_watchlist, get_emails_for_symbol)
+from app.database import (init_db, add_to_watchlist, remove_from_watchlist, get_full_watchlist, get_unique_symbols_from_watchlist, get_emails_for_symbol)
 from app.symbol_normalizer import normalize_symbol
 from app.email_sender import send_email_report
 from app.modules import (data_fetcher, trend_engine, smc_engine, sentiment_engine, tp_engine, time_engine, aggregator, risk_engine)
