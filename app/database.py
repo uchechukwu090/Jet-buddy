@@ -29,5 +29,13 @@ def init_db():
         cursor.execute("CREATE TABLE IF NOT EXISTS api_usage_log (id INTEGER PRIMARY KEY, api_provider TEXT NOT NULL, timestamp REAL NOT NULL)")
         conn.commit()
 
+def get_email_by_symbol(symbol: str) -> Optional[str]:
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT email FROM watchlist WHERE normalized_symbol = ?", (symbol,))
+        row = cursor.fetchone()
+        return row[0] if row else None
+
+
 # --- Cache, Watchlist, and API Log functions are unchanged ---
 # (Omitted for brevity, they are identical to the previous response)
