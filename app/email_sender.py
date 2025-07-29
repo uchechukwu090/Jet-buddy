@@ -3,10 +3,9 @@
 # --- Description:
 # [ADJUSTMENT 3 - Implemented] Sends formatted email reports of the
 # analysis results using SMTP.
-
+from typing import List, Dict, Optional
 import smtplib
 from email.mime.multipart import MIMEMultipart
-from typing import List, Dict, Optional
 from email.mime.text import MIMEText
 from app.config import settings
 from app.models import AnalysisOutput
