@@ -10,33 +10,80 @@ import pandas as pd
 from typing import Optional, List, Dict, Union
 from datetime import datetime, timedelta
 from app.config import settings
+from app.database import log_api_call, get_api_calls_in_last_minute
+from twelvedata import TDClient
 
 # --- Finnhub Fetcher ---
-def get_finnhub_ohlcv(symbol: str, resolution: str = '15', count: int = 200) -> Optional[pd.DataFrame]:
-    """
-    Fetches OHLCV data from Finnhub.
-    Resolutions: 1, 5, 15, 30, 60, D, W, M.
-    """
-    try:
-        end_time = int(datetime.now().timestamp())
-        start_time = int((datetime.now() - timedelta(days=30)).timestamp()) # Fetch enough data
+class DataUnavailableError(Exception):
+    """Custom exception for when a data provider fails to return valid data."""
+    pass
 
-        url = f"https://finnhub.io/api/v1/stock/candle?symbol={symbol}&resolution={resolution}&from={start_time}&to={end_time}&token={settings.finnhub_api_key}"
+def _get_finnhub_ohlcv(symbol: str, interval: str, count: int) -> pd.DataFrame:
+    """Internal function to query Finnhub. Raises DataUnavailableError on failure."""
+    api_symbol = symbol.replace('/', '')
+    try:
+        # Map our standard interval to Finnhub's format
+        resolution_map = {'15min': '15', '1h': '60', '1day': 'D'}
+        resolution = resolution_map.get(interval, '15')
+        
+        # Determine if it's a forex or stock symbol for the correct endpoint
+        url = f"https://finnhub.io/api/v1/stock/candle?symbol={api_symbol}&resolution={resolution}&count={count}&token={settings.finnhub_api_key}"
+        if '/' in symbol:
+            url = f"https://finnhub.io/api/v1/forex/candle?symbol={api_symbol}&resolution={resolution}&count={count}&token={settings.finnhub_api_key}"
+
         response = requests.get(url)
-        response.raise_for_status()
+        response.raise_for_status()  # Raise HTTPError for bad responses (4xx or 5xx)
         data = response.json()
 
         if data.get('s') != 'ok' or not data.get('c'):
-            print(f"Finnhub Error: No data for {symbol}")
-            return None
+            raise DataUnavailableError(f"Finnhub returned no or invalid data for {symbol}.")
 
         df = pd.DataFrame(data)
         df.rename(columns={'c': 'close', 'h': 'high', 'l': 'low', 'o': 'open', 'v': 'volume', 't': 'timestamp'}, inplace=True)
         df['datetime'] = pd.to_datetime(df['timestamp'], unit='s')
-        return df.set_index('datetime').tail(count)
+        return df.set_index('datetime')
+    except (requests.exceptions.RequestException, ValueError, KeyError) as e:
+        raise DataUnavailableError(f"Finnhub API query failed for {symbol}: {e}") from e
+
+def _get_twelvedata_ohlcv(symbol: str, interval: str, output_size: int) -> pd.DataFrame:
+    """Internal function to query Twelve Data. Raises DataUnavailableError on failure."""
+    try:
+        td = TDClient(apikey=settings.twelvedata_api_key)
+        ts = td.time_series(symbol=symbol, interval=interval, outputsize=output_size).as_pandas()
+        
+        if ts is None or ts.empty:
+            raise DataUnavailableError(f"Twelve Data returned no data for {symbol}.")
+        
+        return ts.iloc[::-1]  # Reverse to get chronological order
     except Exception as e:
-        print(f"Error fetching Finnhub data for {symbol}: {e}")
-        return None
+        raise DataUnavailableError(f"Twelve Data API query failed for {symbol}: {e}") from e
+
+def get_ohlcv_data(symbol: str, interval: str = '15min', output_size: int = 200) -> (pd.DataFrame, str):
+    """
+    Fetches OHLCV data with a robust fallback mechanism.
+    Tries Finnhub first; on any failure, falls back to Twelve Data.
+    """
+    # 1. Try Primary Provider: Finnhub
+    finnhub_calls = get_api_calls_in_last_minute('finnhub')
+    if finnhub_calls < settings.finnhub_rate_limit:
+        try:
+            log_api_call('finnhub')
+            df = _get_finnhub_ohlcv(symbol, interval, output_size)
+            return df, "Data from Finnhub"
+        except DataUnavailableError as e:
+            print(f"Finnhub failed: {e}. Falling back to Twelve Data.")
+    else:
+        print("Finnhub rate limit reached. Using fallback provider.")
+
+    # 2. Fallback to Secondary Provider: Twelve Data
+    try:
+        log_api_call('twelvedata')
+        df = _get_twelvedata_ohlcv(symbol, interval, output_size)
+        return df, "Data from Twelve Data (fallback)"
+    except DataUnavailableError as e:
+        print(f"Fallback provider Twelve Data also failed: {e}")
+        # If both fail, return None
+        return None, "Failed to fetch data from all providers."
 
 # --- Newsdata.io Fetcher ---
 def get_news_headlines(symbol: str) -> list:
