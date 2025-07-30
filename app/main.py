@@ -98,22 +98,6 @@ def scheduled_analysis_job():
 def normalize_symbol(symbol: str) -> str:
     return symbol.replace("/", "").upper()
 
-def add_to_watchlist(symbol: str, normalized: str, email: str):
-    # placeholder logic (e.g., store in memory or SQLite)
-    pass
-
-def get_full_watchlist() -> List[WatchlistItem]:
-    # return mock data or fetch from DB/cache
-    return []
-
-def remove_from_watchlist(item_id: int):
-    # delete symbol logic
-    pass
-
-def init_db():
-    print("DB init logic placeholder.")
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Handles application startup and shutdown logic."""
