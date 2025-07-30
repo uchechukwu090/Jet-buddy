@@ -54,6 +54,24 @@ def remove_from_watchlist(symbol: str, email: str):
         )
         conn.commit()
 
+def get_full_watchlist() -> List[WatchlistItem]:
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, user_symbol, normalized_symbol, email FROM watchlist")
+        rows = cursor.fetchall()
+
+    return [
+        WatchlistItem(id=row[0], user_symbol=row[1], normalized_symbol=row[2], email=row[3])
+        for row in rows
+    ]
+
+def get_unique_symbols_from_watchlist() -> List[str]:
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT DISTINCT normalized_symbol FROM watchlist")
+        rows = cursor.fetchall()
+
+    return [row[0] for row in rows]
 
 # --- Cache, Watchlist, and API Log functions are unchanged ---
 # (Omitted for brevity, they are identical to the previous response)
