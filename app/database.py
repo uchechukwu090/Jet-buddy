@@ -8,6 +8,7 @@ import sqlite3
 import json
 import time
 from typing import Optional, Dict, Any, List
+from app.config import settings
 from app.models import WatchlistItem
 
 DB_PATH = "jet_buddy_main.db"
