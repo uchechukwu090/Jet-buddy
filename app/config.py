@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     sender_email: str
     smtp_password: str
 
+    # Db path settings
+    db_path: str = "jetbuddy.db"
+
     class Config:
         env_file = ".env"
 
