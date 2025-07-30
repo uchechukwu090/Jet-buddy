@@ -45,6 +45,14 @@ def add_to_watchlist(symbol: str, normalized: str, email: str):
             (symbol, normalized, email)
         )
         conn.commit()
+def remove_from_watchlist(symbol: str, email: str):
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "DELETE FROM watchlist WHERE user_symbol = ? AND email = ?",
+            (symbol, email)
+        )
+        conn.commit()
 
 
 # --- Cache, Watchlist, and API Log functions are unchanged ---
