@@ -36,6 +36,15 @@ def get_email_by_symbol(symbol: str) -> Optional[str]:
         row = cursor.fetchone()
         return row[0] if row else None
 
+def add_to_watchlist(symbol: str, normalized: str, email: str):
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT OR IGNORE INTO watchlist (user_symbol, normalized_symbol, email) VALUES (?, ?, ?)",
+            (symbol, normalized, email)
+        )
+        conn.commit()
+
 
 # --- Cache, Watchlist, and API Log functions are unchanged ---
 # (Omitted for brevity, they are identical to the previous response)
