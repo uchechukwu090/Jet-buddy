@@ -26,54 +26,54 @@ from app.modules import (data_fetcher, trend_engine, smc_engine, sentiment_engin
 
 # --- Analysis Pipeline ---
 def run_full_analysis(symbol: str):
-    """
-    Orchestrates the entire analysis pipeline for a given symbol.
-    """
+    """Orchestrates the entire analysis pipeline for a given symbol."""
     print(f"[{datetime.now()}] Running full analysis for {symbol}...")
-    
-    # 1. Fetch Data
-    # Using Finnhub as the primary source for OHLCV
-    ohlcv_df = data_fetcher.get_finnhub_ohlcv(symbol, resolution='15', count=200)
+
+    # 1. Fetch OHLCV data
+    ohlcv_df = data_fetcher.get_ohlcv(symbol, resolution='15', count=200)
     if ohlcv_df is None or ohlcv_df.empty:
-        error_result = {"status": "error", "error_message": f"Could not fetch market data for {symbol}."}
-        set_cached_analysis(symbol, error_result)
-        return
+        raise HTTPException(status_code=404, detail="No OHLCV data found.")
 
-    # 2. Run Individual Analysis Modules
-    trend_result = trend_engine.analyze_trend(ohlcv_df)
-    smc_result = smc_engine.analyze_smc_structure(ohlcv_df)
-    sentiment_result = sentiment_engine.analyze_sentiment(symbol)
-    
-    # 3. Aggregate Signals
-    aggregator_result = aggregator.aggregate_signals(trend_result, sentiment_result, smc_result)
-    
-    # 4. Time & Volatility Estimation
-    entry_zone = smc_result.get('order_block', {}).get('zone') if smc_result.get('order_block') else None
-    time_result = time_engine.estimate_time_and_volatility(ohlcv_df, entry_zone)
+    # 2. Run analysis modules
+    trend_result = trend_engine.get_bias(ohlcv_df)
+    structure = smc_engine.get_structure(ohlcv_df)
+    sentiment_result = sentiment_engine.get_confidence(symbol)
+    entry_price = structure.get('key_level', ohlcv_df['close'].iloc[-1])
 
-    # 5. Risk Management
-    risk_result = risk_engine.get_position_size(
-        confidence=aggregator_result['bias_confidence'],
-        volatility=time_result['volatility']
-    )
+    # 3. Time-based analysis
+    time_result = time_engine.estimate_entry_and_tp_time(ohlcv_df)
 
-    # 6. Format Final Output
-    final_output = {
+    # 4. Risk analysis
+    risk_result = risk_engine.calculate_risk(entry_price, structure)
+
+    # 5. TP and SL generation
+    tp_data = tp_engine.generate_tp_levels(trend_result, structure, sentiment_result)
+    sl_level = sl_engine.generate_sl_level(entry_price, trend_result, structure)
+
+    # 6. Aggregate signal
+    signal = {
+        "symbol": symbol,
         "trend_direction": trend_result.get('trend_direction', 'N/A'),
         "sentiment": sentiment_result.get('sentiment', 'N/A'),
-        "bias_confidence": aggregator_result.get('bias_confidence', 0.0),
+        "bias_confidence": tp_data.get('bias_confidence', 0.0),
+        "entry_price": entry_price,
         "entry_zone": time_result.get('best_entry_zone', 'N/A'),
         "estimated_entry_time": time_result.get('estimated_entry_time', 'N/A'),
         "tp_eta": time_result.get('tp_eta', 'N/A'),
+        "tp_zone": tp_data.get('tp_zone', 'N/A'),
+        "tp_levels": tp_data.get('levels', []),
+        "sl_level": sl_level,
         "risk_profile": risk_result.get('risk_profile', 'N/A'),
         "suggested_lot_size": risk_result.get('suggested_lot_size', 0.0),
         "status": "ok",
         "error_message": None
     }
-    
-    # Cache the final result
-    set_cached_analysis(symbol, final_output)
-    print(f"[{datetime.now()}] Analysis for {symbol} complete and cached.")
+
+    # 7. Cache, email, and return
+    set_cached_analysis(symbol, signal)
+    send_email_report(symbol, signal)
+    return signal
+
 
 # Dynamic cors for multiple domain
 def get_cors_origins():
