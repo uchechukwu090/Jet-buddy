@@ -5,7 +5,7 @@
 # Implements the BayesianAggregator using a simple weighted model.
 # It fuses the outputs from the trend, sentiment, and structure modules
 # into a single directional bias confidence score.
-from .tp_engine import generate_tp_levels
+from .tp_engine import generate_tp_prediction
 from .sl_engine import generate_sl_level
 
 def aggregate_trade_signal(data: dict) -> dict:
@@ -14,7 +14,7 @@ def aggregate_trade_signal(data: dict) -> dict:
     confidence = data.get('confidence', 50)
     entry_price = data.get('entry_price', structure.get('key_level', 1.0))
 
-    tp_data = generate_tp_levels(bias, structure, confidence)
+    tp_data = generate_tp_prediction(bias, structure, confidence)
     sl_level = generate_sl_level(entry_price, bias, structure)
 
     return {
