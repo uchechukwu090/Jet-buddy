@@ -73,5 +73,25 @@ def get_unique_symbols_from_watchlist() -> List[str]:
 
     return [row[0] for row in rows]
 
+def log_api_call(api_provider: str):
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO api_usage_log (api_provider, timestamp) VALUES (?, ?)",
+            (api_provider, time.time())
+        )
+        conn.commit()
+
+def get_api_calls_in_last_minute(api_provider: str) -> int:
+    one_minute_ago = time.time() - 60
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT COUNT(*) FROM api_usage_log WHERE api_provider = ? AND timestamp > ?",
+            (api_provider, one_minute_ago)
+        )
+        result = cursor.fetchone()
+        return result[0] if result else 0
+
 # --- Cache, Watchlist, and API Log functions are unchanged ---
 # (Omitted for brevity, they are identical to the previous response)
