@@ -47,7 +47,7 @@ def run_full_analysis(symbol: str):
     risk_result = risk_engine.calculate_risk(entry_price, structure)
 
     # 5. TP and SL generation
-    tp_data = tp_engine.generate_prediction(trend_result, structure, sentiment_result)
+    tp_data = tp_engine.generate_tp_prediction(trend_result, structure, sentiment_result)
     sl_level = sl_engine.generate_sl_level(entry_price, trend_result, structure)
 
     # 6. Aggregate signal
