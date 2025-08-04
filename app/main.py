@@ -100,8 +100,8 @@ def normalize_symbol(symbol: str) -> str:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Handles application startup and shutdown logic."""
-    print("Starting Jet Buddy Engine...")
     init_db()
+    print("Starting Jet Buddy Engine...")
     # Add cron jobs for market sessions (unchanged)
     scheduler.add_job(scheduled_analysis_job, 'cron', hour=6, minute=55, id="pre_london")
     scheduler.add_job(scheduled_analysis_job, 'cron', hour=12, minute=55, id="pre_ny")
