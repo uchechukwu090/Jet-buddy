@@ -13,3 +13,4 @@ pandas
 scikit-learn
 PyWavelets
 pykalman
+psycopg2-binary
