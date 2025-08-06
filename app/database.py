@@ -16,7 +16,7 @@ from app.models import WatchlistItem
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 def get_connection():
-    return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+    return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor).strip()
 
 def init_db():
     """Initializes all required tables in the PostgreSQL database."""
