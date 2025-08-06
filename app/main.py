@@ -196,8 +196,6 @@ async def get_analysis(symbol: str, background_tasks: BackgroundTasks):
              raise HTTPException(status_code=500, detail=cached_data.get("error_message"))
         return AnalysisOutput(**cached_data)
     else:
-        # If not in cache, trigger a background analysis and return a pending status
-        if symbol not in SYMBOLS_TO_TRACK:
             # For on-demand analysis of untracked symbols
              background_tasks.add_task(run_full_analysis, symbol)
         
