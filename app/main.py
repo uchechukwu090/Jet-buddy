@@ -101,6 +101,7 @@ def normalize_symbol(symbol: str) -> str:
 async def lifespan(app: FastAPI):
     """Handles application startup and shutdown logic."""
     init_db()
+    init_cache()
     print("Starting Jet Buddy Engine...")
     # Add cron jobs for market sessions (unchanged)
     scheduler.add_job(scheduled_analysis_job, 'cron', hour=6, minute=55, id="pre_london")
