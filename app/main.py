@@ -5,17 +5,16 @@
 # The main application file. It sets up the FastAPI server, defines API
 # endpoints, and orchestrates the analysis pipeline and scheduling.
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+# --- FastAPI App ---
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from typing import List, Optional
 from contextlib import asynccontextmanager
-from typing import List, Dict, Optional, Union
 from datetime import datetime
 import os
 import json
 
-# --- Imports ---
 from app.config import settings
 from app.models import AnalysisOutput, WatchlistAddItem, WatchlistItem
 from app.caching import init_cache, set_cached_analysis, get_cached_analysis
@@ -29,22 +28,7 @@ from app.modules import (
     data_fetcher, trend_engine, smc_engine, sentiment_engine,
     tp_engine, time_engine, aggregator, risk_engine
 )
-
-# --- FastAPI App ---
-app = FastAPI(lifespan=None, title="Jet Buddy Trading Engine")
-
-# --- CORS Setup ---
-def get_cors_origins():
-    origins = os.getenv("CORS_ALLOW_ORIGINS", "*")
-    return [origin.strip() for origin in origins.split(",")]
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=get_cors_origins(),
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 # --- Symbol Normalization ---
 def normalize_symbol(symbol: str) -> str:
@@ -53,7 +37,6 @@ def normalize_symbol(symbol: str) -> str:
 # --- Analysis Pipeline ---
 def run_full_analysis(symbol: str):
     print(f"[{datetime.now()}] Running full analysis for {symbol}...")
-
     ohlcv_df = data_fetcher.get_ohlcv(symbol, resolution='15', count=200)
     if ohlcv_df is None or ohlcv_df.empty:
         raise HTTPException(status_code=404, detail="No OHLCV data found.")
@@ -65,7 +48,7 @@ def run_full_analysis(symbol: str):
     time_result = time_engine.estimate_entry_and_tp_time(ohlcv_df)
     risk_result = risk_engine.calculate_risk(entry_price, structure)
     tp_data = tp_engine.generate_tp_prediction(trend_result, structure, sentiment_result)
-    sl_level = tp_data.get('sl_level', None)  # Replace with sl_engine if available
+    sl_level = tp_data.get('sl_level', None)
 
     signal = {
         "symbol": symbol,
@@ -116,6 +99,19 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan, title="Jet Buddy Trading Engine")
 
+# --- CORS Setup ---
+def get_cors_origins():
+    origins = os.getenv("CORS_ALLOW_ORIGINS", "*")
+    return [origin.strip() for origin in origins.split(",")]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=get_cors_origins(),
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # --- Endpoints ---
 @app.get("/")
 def root():
@@ -136,8 +132,10 @@ async def get_analysis(symbol: str, background_tasks: BackgroundTasks):
             detail=f"Analysis for {symbol} is not yet available. It has been scheduled. Please check back in a few minutes."
         )
 
-@app.post("/watchlist/add", status_code=201, tags=["Watchlist"])
-def add_symbol_to_watchlist(item: WatchlistAddItem, background_tasks: BackgroundTasks):
+@app.api_route("/watchlist/add", methods=["OPTIONS", "POST"], status_code=201, tags=["Watchlist"])
+def add_symbol_to_watchlist(request: Request, item: Optional[WatchlistAddItem] = None, background_tasks: Optional[BackgroundTasks] = None):
+    if request.method == "OPTIONS":
+        return JSONResponse(content={"detail": "CORS preflight OK"}, status_code=200)
     normalized = normalize_symbol(item.symbol)
     add_to_watchlist(item.symbol, normalized, item.email)
     background_tasks.add_task(run_full_analysis, normalized)
@@ -181,6 +179,12 @@ async def get_sentiment(symbol: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/analyze/force-run/{symbol}", response_model=AnalysisOutput)
+def force_run_analysis(symbol: str):
+    symbol = symbol.upper()
+    result = run_full_analysis(symbol)
+    return AnalysisOutput(**result)
+
 @app.get("/health/cache")
 def check_cache():
     try:
@@ -190,8 +194,5 @@ def check_cache():
         return {"status": "error", "message": str(e)}
 
 @app.exception_handler(Exception)
-async def global_exception_handler(request, exc):
-    return JSONResponse(
-        status_code=500,
-        content={"detail": "An unexpected error occurred."}
-    )
+async def global_exception_handler(request: Request, exc: Exception):
+    return JSONResponse(status_code=500, content={"detail": "An unexpected error occurred."})
