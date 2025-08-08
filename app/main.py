@@ -10,7 +10,8 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from typing import List, Optional
-from fastapi import Request, Depends
+from fastapi import Request
+from fastapi.concurrency import run_in_threadpool
 from contextlib import asynccontextmanager
 from datetime import datetime
 import os
@@ -134,20 +135,27 @@ async def get_analysis(symbol: str, background_tasks: BackgroundTasks):
         )
 
 @app.api_route("/watchlist/add", methods=["OPTIONS", "POST"], status_code=201, tags=["Watchlist"])
-def add_symbol_to_watchlist(
-    request: Request,
-    item: Optional[WatchlistAddItem] = None,
-    background_tasks: BackgroundTasks = Depends()
-):
+async def add_symbol_to_watchlist(request: Request):
     if request.method == "OPTIONS":
         return JSONResponse(content={"detail": "CORS preflight OK"}, status_code=200)
-    normalized = normalize_symbol(item.symbol)
-    add_to_watchlist(item.symbol, normalized, item.email)
-    background_tasks.add_task(run_full_analysis, normalized)
-    return {"message": f"'{item.symbol}' (as '{normalized}') added to watchlist. Analysis triggered."}
-@app.get("/watchlist", response_model=List[WatchlistItem], tags=["Watchlist"])
-def get_watchlist():
-    return get_full_watchlist()
+
+    body = await request.json()
+    symbol = body.get("symbol")
+    email = body.get("email")  # Optional
+
+    if not symbol:
+        raise HTTPException(status_code=400, detail="Symbol is required.")
+
+    normalized = normalize_symbol(symbol)
+    add_to_watchlist(symbol, normalized, email)  # Handles None or multiple emails
+
+    await run_in_threadpool(run_full_analysis, normalized)
+
+    msg = f"'{symbol}' (as '{normalized}') added to watchlist. Analysis triggered."
+    if email:
+        msg += f" Signal will be sent to {email}."
+
+    return {"message": msg}
 
 @app.delete("/watchlist/remove/{item_id}", status_code=200, tags=["Watchlist"])
 def remove_symbol_from_watchlist(item_id: int):
