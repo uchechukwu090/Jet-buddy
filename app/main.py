@@ -27,7 +27,7 @@ from app.database import (
     get_unique_symbols_from_watchlist,
     get_emails_for_symbol,
 )
-from app.symbol_normalizer import normalize_symbol
+from app.symbol_normalizer import normalize_symbol, AssetClass, Provider
 from app.email_sender import send_email_report
 from app.modules import (
     data_fetcher,
@@ -44,25 +44,33 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 # ------------------------------------------------------------------------------
 # Analysis Pipeline
 # ------------------------------------------------------------------------------
-def run_full_analysis(symbol: str):
-    print(f"[{datetime.now()}] Running full analysis for {symbol}...")
+def run_full_analysis(
+    symbol: str,
+    asset: AssetClass = AssetClass.STOCK,
+    provider: Provider = Provider.FINNHUB
+):
+    # 1. Normalize the incoming symbol for the chosen asset class + provider
+    norm = normalize_symbol(symbol, asset=asset, provider=provider)
+    print(f"[{datetime.now()}] Running full analysis for {norm} (original: {symbol})…")
 
-    # get_ohlcv_data returns (DataFrame, note)
-    ohlcv_df, _ = data_fetcher.get_ohlcv_data(symbol)
+    # 2. Fetch OHLCV data using the normalized symbol
+    ohlcv_df, _ = data_fetcher.get_ohlcv_data(norm)
     if ohlcv_df is None or ohlcv_df.empty:
-        raise HTTPException(status_code=404, detail="No OHLCV data found.")
+        raise HTTPException(status_code=404, detail=f"No OHLCV data found for '{norm}'.")
 
+    # 3. Core analysis engines
     trend_result = trend_engine.get_bias(ohlcv_df)
     structure = smc_engine.get_structure(ohlcv_df)
-    sentiment_result = sentiment_engine.get_confidence(symbol)
+    sentiment_result = sentiment_engine.get_confidence(norm)
     entry_price = structure.get("key_level", ohlcv_df["close"].iloc[-1])
     time_result = time_engine.estimate_entry_and_tp_time(ohlcv_df)
     risk_result = risk_engine.calculate_risk(entry_price, structure)
     tp_data = tp_engine.generate_tp_prediction(trend_result, structure, sentiment_result)
     sl_level = tp_data.get("sl_level")
 
+    # 4. Assemble signal payload
     signal = {
-        "symbol": symbol,
+        "symbol": norm,
         "trend_direction": trend_result.get("trend_direction", "N/A"),
         "sentiment": sentiment_result.get("sentiment", "N/A"),
         "bias_confidence": tp_data.get("bias_confidence", 0.0),
@@ -79,8 +87,10 @@ def run_full_analysis(symbol: str):
         "error_message": None,
     }
 
-    set_cached_analysis(symbol, signal)
-    send_email_report(symbol, signal)
+    # 5. Cache & report
+    set_cached_analysis(norm, signal)
+    send_email_report(norm, signal)
+
     return signal
 
 
@@ -180,6 +190,15 @@ async def add_symbol_to_watchlist(item: WatchlistAddItem, background_tasks: Back
         msg += f" Signal will be sent to {item.email}."
 
     return {"message": msg}
+
+
+@app.get("/watchlist", response_model=List[WatchlistItem], tags=["Watchlist"])
+def get_watchlist():
+    """
+    Return all items in the watchlist so your front end can fetch them.
+    """
+    return get_full_watchlist()
+
 
 @app.delete("/watchlist/remove/{item_id}", status_code=200, tags=["Watchlist"])
 def remove_symbol_from_watchlist(item_id: int):
