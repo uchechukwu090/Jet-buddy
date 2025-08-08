@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 from app.config import settings
 from app.database import log_api_call, get_api_calls_in_last_minute
 from twelvedata import TDClient
+from app.symbol_normalizer import normalize_symbol, AssetClass, Provider
 
 # --- Finnhub Fetcher ---
 class DataUnavailableError(Exception):
@@ -58,33 +59,39 @@ def _get_twelvedata_ohlcv(symbol: str, interval: str, output_size: int) -> pd.Da
     except Exception as e:
         raise DataUnavailableError(f"Twelve Data API query failed for {symbol}: {e}") from e
 
-def get_ohlcv_data(symbol: str, interval: str = '15min', output_size: int = 200) -> (pd.DataFrame, str):
-    """
-    Fetches OHLCV data with a robust fallback mechanism.
-    Tries Finnhub first; on any failure, falls back to Twelve Data.
-    """
-    # 1. Try Primary Provider: Finnhub
-    finnhub_calls = get_api_calls_in_last_minute('finnhub')
-    if finnhub_calls < settings.finnhub_rate_limit:
+def get_ohlcv_data(
+    symbol: str,
+    interval: str = "15min",
+    output_size: int = 200,
+    asset: AssetClass = AssetClass.STOCK,
+    provider: Provider = Provider.FINNHUB
+) -> Tuple[pd.DataFrame, str]:
+    # 1) normalize
+    norm = normalize_symbol(symbol, asset=asset, provider=provider)
+
+    # 2) Fetch from primary provider
+    calls = get_api_calls_in_last_minute(provider.value)
+    if calls < settings.rate_limits[provider]:
         try:
-            log_api_call('finnhub')
-            df = _get_finnhub_ohlcv(symbol, interval, output_size)
-            return df, "Data from Finnhub"
-        except DataUnavailableError as e:
-            print(f"Finnhub failed: {e}. Falling back to Twelve Data.")
-    else:
-        print("Finnhub rate limit reached. Using fallback provider.")
+            log_api_call(provider.value)
+            if provider == Provider.FINNHUB:
+                df = _get_finnhub_ohlcv(norm, interval, output_size)
+                return df, "Data from Finnhub"
+            # add more providers here…
+        except DataUnavailableError:
+            pass
 
-    # 2. Fallback to Secondary Provider: Twelve Data
+    # 3) Fallback (e.g. TwelveData)
     try:
-        log_api_call('twelvedata')
-        df = _get_twelvedata_ohlcv(symbol, interval, output_size)
+        log_api_call(Provider.TWELVEDATA.value)
+        df = _get_twelvedata_ohlcv(
+            normalize_symbol(symbol, asset=asset, provider=Provider.TWELVEDATA),
+            interval,
+            output_size
+        )
         return df, "Data from Twelve Data (fallback)"
-    except DataUnavailableError as e:
-        print(f"Fallback provider Twelve Data also failed: {e}")
-        # If both fail, return None
-        return None, "Failed to fetch data from all providers."
-
+    except DataUnavailableError:
+        return None, "Failed all providers"
 # --- Newsdata.io Fetcher ---
 def get_news_headlines(symbol: str) -> list:
     """Fetches recent news headlines related to a financial symbol."""
