@@ -163,26 +163,23 @@ async def get_analysis(symbol: str, background_tasks: BackgroundTasks):
 
 
 @app.api_route("/watchlist/add", methods=["OPTIONS", "POST"], status_code=201, tags=["Watchlist"])
-async def add_symbol_to_watchlist(request: Request):
-    if request.method == "OPTIONS":
-        return JSONResponse(content={"detail": "CORS preflight OK"}, status_code=200)
+async def add_symbol_to_watchlist(item: WatchlistAddItem, background_tasks: BackgroundTasks):
+    """
+    WatchlistAddItem has:
+      - symbol: str (required)
+      - email: Optional[str]
+    """
+    normalized = normalize_symbol(item.symbol)
+    add_to_watchlist(item.symbol, normalized, item.email)  
 
-    body = await request.json()
-    symbol = body.get("symbol")
-    email = body.get("email")
+    # Trigger analysis in the background:
+    background_tasks.add_task(run_full_analysis, normalized)
 
-    if not symbol:
-        raise HTTPException(status_code=400, detail="Symbol is required.")
+    msg = f"'{item.symbol}' (as '{normalized}') added to watchlist. Analysis triggered."
+    if item.email:
+        msg += f" Signal will be sent to {item.email}."
 
-    normalized = normalize_symbol(symbol)
-    add_to_watchlist(symbol, normalized, email)
-    await run_in_threadpool(run_full_analysis, normalized)
-
-    msg = f"'{symbol}' (as '{normalized}') added to watchlist. Analysis triggered."
-    if email:
-        msg += f" Signal will be sent to {email}."
     return {"message": msg}
-
 
 @app.delete("/watchlist/remove/{item_id}", status_code=200, tags=["Watchlist"])
 def remove_symbol_from_watchlist(item_id: int):
