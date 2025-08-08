@@ -37,11 +37,15 @@ def normalize_symbol(symbol: str) -> str:
     return symbol.replace("/", "").upper()
 
 # --- Analysis Pipeline ---
-def run_full_analysis(symbol: str):
-    print(f"[{datetime.now()}] Running full analysis for {symbol}...")
-    ohlcv_df = data_fetcher.get_ohlcv(symbol, resolution='15', count=200)
-    if ohlcv_df is None or ohlcv_df.empty:
-        raise HTTPException(status_code=404, detail="No OHLCV data found.")
+ def run_full_analysis(symbol: str):
+     print(f"[{datetime.now()}] Running full analysis for {symbol}...")
+
+-    ohlcv_df = data_fetcher.get_ohlcv(symbol, resolution='15', count=200)
++    # data_fetcher.get_ohlcv_data returns (DataFrame, note)
++    ohlcv_df, _ = data_fetcher.get_ohlcv_data(symbol)
+
+     if ohlcv_df is None or ohlcv_df.empty:
+         raise HTTPException(status_code=404, detail="No OHLCV data found.")
 
     trend_result = trend_engine.get_bias(ohlcv_df)
     structure = smc_engine.get_structure(ohlcv_df)
