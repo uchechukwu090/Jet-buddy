@@ -7,7 +7,7 @@
 
 import requests
 import pandas as pd
-from typing import Optional, List, Dict, Union
+from typing import Optional, List, Dict, Union, Tuple
 from datetime import datetime, timedelta
 from app.config import settings
 from app.database import log_api_call, get_api_calls_in_last_minute
