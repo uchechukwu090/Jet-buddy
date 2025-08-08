@@ -10,6 +10,7 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from typing import List, Optional
+from fastapi import Request, Depends
 from contextlib import asynccontextmanager
 from datetime import datetime
 import os
@@ -133,14 +134,17 @@ async def get_analysis(symbol: str, background_tasks: BackgroundTasks):
         )
 
 @app.api_route("/watchlist/add", methods=["OPTIONS", "POST"], status_code=201, tags=["Watchlist"])
-def add_symbol_to_watchlist(request: Request, item: Optional[WatchlistAddItem] = None, background_tasks: Optional[BackgroundTasks] = None):
+def add_symbol_to_watchlist(
+    request: Request,
+    item: Optional[WatchlistAddItem] = None,
+    background_tasks: BackgroundTasks = Depends()
+):
     if request.method == "OPTIONS":
         return JSONResponse(content={"detail": "CORS preflight OK"}, status_code=200)
     normalized = normalize_symbol(item.symbol)
     add_to_watchlist(item.symbol, normalized, item.email)
     background_tasks.add_task(run_full_analysis, normalized)
     return {"message": f"'{item.symbol}' (as '{normalized}') added to watchlist. Analysis triggered."}
-
 @app.get("/watchlist", response_model=List[WatchlistItem], tags=["Watchlist"])
 def get_watchlist():
     return get_full_watchlist()
