@@ -168,11 +168,17 @@ def get_cors_origins() -> List[str]:
     origins = os.getenv("CORS_ALLOW_ORIGINS", "*")
     return [o.strip() for o in origins.split(",")]
 
+ALLOWED_ORIGINS = [
+    "https://9fcb73c8-5bbb-4200-a5b9-3f3dd8635e07.canvases.tempo.build",
+    "http://localhost:5173",
+    "http://localhost:3000",
+    # add any other frontends you use
+]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=get_cors_origins(),
-    allow_credentials=True,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=False,  # keep false if you aren’t sending cookies/auth
     allow_methods=["*"],
     allow_headers=["*"],
 )
