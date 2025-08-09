@@ -72,7 +72,7 @@ def run_full_analysis(
             print(f"{provider.value.capitalize()} failed ({primary_exc}). Falling back to Twelve Data.")
             used_provider = Provider.TWELVEDATA
             ohlcv_df, source = data_fetcher.get_ohlcv_data(
-                norm,
+                symbol,
                 interval="15min",
                 output_size=200,
                 asset=asset,
