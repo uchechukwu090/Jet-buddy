@@ -4,7 +4,7 @@
 # --- Description:
 # Pydantic models for API request/response and data structures.
 
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from typing import Optional, List
 
 class AnalysisOutput(BaseModel):
@@ -28,9 +28,12 @@ class WatchlistAddItem(BaseModel):
 
 class WatchlistItem(BaseModel):
     id: int
-    user_symbol: str
-    normalized_symbol: str
+    symbol: str = Field(..., alias="user_symbol")
+    normalized_symbol: Optional[str] = None
     email: Optional[EmailStr] = None
+    created_at: datetime
 
     class Config:
-        from_attributes = True
+        # allow Pydantic to use the alias "symbol" when serializing
+        allow_population_by_field_name = True
+        orm_mode = True
