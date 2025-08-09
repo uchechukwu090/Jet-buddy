@@ -263,13 +263,21 @@ async def get_sentiment(symbol: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def infer_asset(symbol: str) -> AssetClass:
+    s = symbol.upper()
+    if "/" in s:
+        return AssetClass.FX
+    if any(k in s for k in ("BTC", "ETH", "SOL", "USDT")):
+        return AssetClass.CRYPTO
+    return AssetClass.STOCK
+
 @app.post("/analyze/force-run/{symbol}", response_model=AnalysisOutput, tags=["Analysis"])
 def force_run_analysis(
     symbol: str,
-    asset: AssetClass = AssetClass.STOCK,
+    asset: AssetClass | None = None,
     provider: Provider = Provider.FINNHUB
 ):
-    return run_full_analysis(symbol, asset=asset, provider=provider)
+    return run_full_analysis(symbol, asset=asset or infer_asset(symbol), provider=provider)
 
 
 @app.get("/health/cache", tags=["Health"])
