@@ -19,30 +19,41 @@ class DataUnavailableError(Exception):
     """Custom exception for when a data provider fails to return valid data."""
     pass
 
-def _get_finnhub_ohlcv(symbol: str, interval: str, count: int) -> pd.DataFrame:
-    """Internal function to query Finnhub. Raises DataUnavailableError on failure."""
-    api_symbol = symbol.replace('/', '')
-    try:
+def _get_finnhub_ohlcv(symbol: str, interval: str, count: int, asset: AssetClass) -> pd.DataFrame:
+    """
+    symbol must already be in Finnhub format:
+      - STOCK:   AAPL
+      - FX:      OANDA:EUR_USD
+      - CRYPTO:  BINANCE:BTCUSDT
+    """
         # Map our standard interval to Finnhub's format
         resolution_map = {'15min': '15', '1h': '60', '1day': 'D'}
         resolution = resolution_map.get(interval, '15')
         
         # Determine if it's a forex or stock symbol for the correct endpoint
-        url = f"https://finnhub.io/api/v1/stock/candle?symbol={api_symbol}&resolution={resolution}&count={count}&token={settings.finnhub_api_key}"
-        if '/' in symbol:
-            url = f"https://finnhub.io/api/v1/forex/candle?symbol={api_symbol}&resolution={resolution}&count={count}&token={settings.finnhub_api_key}"
+        base = "https://finnhub.io/api/v1"
+    if asset == AssetClass.FX:
+        endpoint = "forex/candle"
+    elif asset == AssetClass.CRYPTO:
+        endpoint = "crypto/candle"
+    else:
+        endpoint = "stock/candle"
 
-        response = requests.get(url)
-        response.raise_for_status()  # Raise HTTPError for bad responses (4xx or 5xx)
-        data = response.json()
+    url = (
+        f"{base}/{endpoint}?symbol={symbol}&resolution={resolution}&count={count}"
+        f"&token={settings.finnhub_api_key}"
+    )
 
-        if data.get('s') != 'ok' or not data.get('c'):
-            raise DataUnavailableError(f"Finnhub returned no or invalid data for {symbol}.")
+    response = requests.get(url)
+    response.raise_for_status()
+    data = response.json()
+    if data.get('s') != 'ok' or not data.get('c'):
+        raise DataUnavailableError(f"Finnhub returned no/invalid data for {symbol}.")
 
-        df = pd.DataFrame(data)
-        df.rename(columns={'c': 'close', 'h': 'high', 'l': 'low', 'o': 'open', 'v': 'volume', 't': 'timestamp'}, inplace=True)
-        df['datetime'] = pd.to_datetime(df['timestamp'], unit='s')
-        return df.set_index('datetime')
+    df = pd.DataFrame(data)
+    df.rename(columns={'c': 'close', 'h': 'high', 'l': 'low', 'o': 'open', 'v': 'volume', 't': 'timestamp'}, inplace=True)
+    df['datetime'] = pd.to_datetime(df['timestamp'], unit='s')
+    return df.set_index('datetime')
     except (requests.exceptions.RequestException, ValueError, KeyError) as e:
         raise DataUnavailableError(f"Finnhub API query failed for {symbol}: {e}") from e
 
@@ -66,32 +77,33 @@ def get_ohlcv_data(
     asset: AssetClass = AssetClass.STOCK,
     provider: Provider = Provider.FINNHUB
 ) -> Tuple[pd.DataFrame, str]:
-    # 1) normalize
+    # Normalize for the chosen provider
     norm = normalize_symbol(symbol, asset=asset, provider=provider)
 
-    # 2) Fetch from primary provider
+    # Primary
     calls = get_api_calls_in_last_minute(provider.value)
-    if calls < settings.rate_limits[provider]:
+    if calls < settings.rate_limits[provider.value]:
         try:
             log_api_call(provider.value)
             if provider == Provider.FINNHUB:
-                df = _get_finnhub_ohlcv(norm, interval, output_size)
+                df = _get_finnhub_ohlcv(norm, interval, output_size, asset)
                 return df, "Data from Finnhub"
-            # add more providers here…
+            elif provider == Provider.TWELVEDATA:
+                td_norm = normalize_symbol(symbol, asset=asset, provider=Provider.TWELVEDATA)
+                df = _get_twelvedata_ohlcv(td_norm, interval, output_size)
+                return df, "Data from Twelve Data"
         except DataUnavailableError:
             pass
 
-    # 3) Fallback (e.g. TwelveData)
+    # Fallback to Twelve Data
     try:
         log_api_call(Provider.TWELVEDATA.value)
-        df = _get_twelvedata_ohlcv(
-            normalize_symbol(symbol, asset=asset, provider=Provider.TWELVEDATA),
-            interval,
-            output_size
-        )
+        td_norm = normalize_symbol(symbol, asset=asset, provider=Provider.TWELVEDATA)
+        df = _get_twelvedata_ohlcv(td_norm, interval, output_size)
         return df, "Data from Twelve Data (fallback)"
     except DataUnavailableError:
-        return None, "Failed all providers"
+        return None, "Failed to fetch data from all providers."
+
 # --- Newsdata.io Fetcher ---
 def get_news_headlines(symbol: str) -> list:
     """Fetches recent news headlines related to a financial symbol."""
