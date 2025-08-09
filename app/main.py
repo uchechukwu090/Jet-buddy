@@ -212,17 +212,15 @@ async def get_analysis(symbol: str, background_tasks: BackgroundTasks):
     )
 
 
-@app.api_route("/watchlist/add", status_code=201, tags=["Watchlist"])
+@app.post("/watchlist/add", status_code=201, tags=["Watchlist"])
 async def add_symbol_to_watchlist(item: WatchlistAddItem, background_tasks: BackgroundTasks):
     normalized = normalize_symbol(item.symbol)
     add_to_watchlist(item.symbol, normalized, item.email)
     background_tasks.add_task(run_full_analysis, normalized)
-
     msg = f"Added '{item.symbol}' (normalized to '{normalized}') to watchlist."
     if item.email:
         msg += f" Alerts will be sent to {item.email}."
     return {"message": msg}
-
 
 @app.get("/watchlist", response_model=List[WatchlistItem], tags=["Watchlist"])
 def get_watchlist():
