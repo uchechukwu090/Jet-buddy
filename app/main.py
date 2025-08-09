@@ -57,7 +57,7 @@ def run_full_analysis(
     used_provider = provider
     try:
         ohlcv_df, source = data_fetcher.get_ohlcv_data(
-            norm,
+            symbol,
             interval="15min",
             output_size=200,
             asset=asset,
