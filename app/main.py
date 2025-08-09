@@ -17,7 +17,7 @@ import json
 from typing import List, Optional
 
 from app.config import settings
-from app.schemas import AnalysisOutput, WatchlistAddItem, WatchlistItem
+from app.models import AnalysisOutput, WatchlistAddItem, WatchlistItem
 from app.caching import init_cache, set_cached_analysis, get_cached_analysis
 from app.database import (
     init_db,
