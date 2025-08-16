@@ -1,9 +1,5 @@
 # ==============================================================================
-# FILE: app/modules/data_fetcher.py
-# ==============================================================================
-# --- Description:
-# Fetches OHLCV, headlines, and sentiment from external APIs.
-# Includes per-provider symbol normalization and fallback logic.
+# FILE: app/modules/data_fetcher.py - FIXED VERSION
 # ==============================================================================
 
 import requests
@@ -67,7 +63,7 @@ def _get_twelvedata_ohlcv(symbol: str, interval: str, output_size: int) -> pd.Da
     except Exception as e:
         raise DataUnavailableError(f"Twelve Data error for {symbol}: {e}") from e
 
-# --- Main data fetcher with fallback ---
+# --- FIXED: Main data fetcher with proper fallback logic ---
 def get_ohlcv_data(
     symbol: str,
     interval: str = "15min",
@@ -76,30 +72,36 @@ def get_ohlcv_data(
     provider: Provider = Provider.FINNHUB
 ) -> Tuple[pd.DataFrame, str]:
 
-    # Normalize for primary provider
-    norm = normalize_symbol(symbol, asset=asset, provider=provider)
-
-    # Try Primary
+    # Try Primary Provider
     calls = get_api_calls_in_last_minute(provider.value)
     if calls < settings.rate_limits.get(provider.value, 60):
         try:
             log_api_call(provider.value)
+            
             if provider == Provider.FINNHUB:
-                df = _get_finnhub_ohlcv(norm, interval, output_size, asset)
+                # Normalize symbol for Finnhub
+                finnhub_symbol = normalize_symbol(symbol, asset=asset, provider=Provider.FINNHUB)
+                df = _get_finnhub_ohlcv(finnhub_symbol, interval, output_size, asset)
                 return df, "Data from Finnhub"
+                
             elif provider == Provider.TWELVEDATA:
-                td_norm = normalize_symbol(symbol, asset=asset, provider=Provider.TWELVEDATA)
-                df = _get_twelvedata_ohlcv(td_norm, interval, output_size)
+                # Normalize symbol for Twelve Data
+                td_symbol = normalize_symbol(symbol, asset=asset, provider=Provider.TWELVEDATA)
+                df = _get_twelvedata_ohlcv(td_symbol, interval, output_size)
                 return df, "Data from Twelve Data"
+                
         except DataUnavailableError:
             pass
 
-    # Fallback to Twelve Data
+    # FIXED: Fallback to Twelve Data with fresh normalization
     try:
         log_api_call(Provider.TWELVEDATA.value)
-        td_norm = normalize_symbol(symbol, asset=asset, provider=Provider.TWELVEDATA)
-        df = _get_twelvedata_ohlcv(td_norm, interval, output_size)
+        
+        # FIX #3: Use original symbol for fresh normalization, not pre-normalized symbol
+        td_symbol = normalize_symbol(symbol, asset=asset, provider=Provider.TWELVEDATA)
+        df = _get_twelvedata_ohlcv(td_symbol, interval, output_size)
         return df, "Data from Twelve Data (fallback)"
+        
     except DataUnavailableError:
         return None, "Failed to fetch data from all providers."
 
@@ -142,7 +144,7 @@ def get_llm_sentiment(headline: str, symbol: str) -> str:
 
     except Exception as e:
         print(f"OpenRouter sentiment error: {e}")
-        # Fallback
+        # Fallback keyword-based sentiment
         headline_lower = headline.lower()
         if any(word in headline_lower for word in ['up', 'rises', 'beats', 'gains', 'strong', 'upgrade', 'optimistic']):
             return "Bullish"
