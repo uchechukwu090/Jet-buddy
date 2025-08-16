@@ -1,236 +1,228 @@
 # ==============================================================================
-# FILE: app/database.py
+# FILE: app/database.py - POSTGRES/NEON VERSION
 # ==============================================================================
-# Database operations for API call logging and rate limiting
+# Database operations using SQLAlchemy with Postgres (Neon)
 
-import sqlite3
 import os
 from datetime import datetime, timedelta
-from typing import List, Dict, Optional
-import threading
+from typing import List, Dict, Any, Optional
+import json
+from sqlalchemy import create_engine, Column, String, DateTime, Text, Integer, Float, Boolean
+from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy.exc import IntegrityError
 
-# Thread-safe database connection
-_local = threading.local()
+# Get database URL from environment
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    # Fallback for local development (you can use local postgres or sqlite)
+    DATABASE_URL = "postgresql://localhost/trading_analysis"
+    print("Warning: DATABASE_URL not set, using default local postgres")
 
-def get_db_connection():
-    """Get thread-local database connection"""
-    if not hasattr(_local, 'connection'):
-        db_path = os.getenv('DB_PATH', 'jetbuddy.db')
-        _local.connection = sqlite3.connect(db_path, check_same_thread=False)
-        _local.connection.row_factory = sqlite3.Row
-        init_database(_local.connection)
-    return _local.connection
+# Create SQLAlchemy engine
+engine = create_engine(
+    DATABASE_URL,
+    pool_pre_ping=True,  # Helps with connection drops
+    pool_recycle=300,    # Recycle connections every 5 minutes
+    echo=False           # Set to True for SQL logging
+)
 
-def init_database(conn: sqlite3.Connection):
-    """Initialize database tables"""
-    cursor = conn.cursor()
-    
-    # API calls logging table
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS api_calls (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            provider TEXT NOT NULL,
-            timestamp DATETIME NOT NULL,
-            endpoint TEXT,
-            success BOOLEAN DEFAULT TRUE,
-            error_message TEXT
-        )
-    ''')
-    
-    # Watchlist table
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS watchlist (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            symbol TEXT NOT NULL UNIQUE,
-            asset_class TEXT DEFAULT 'stock',
-            added_at DATETIME NOT NULL,
-            is_active BOOLEAN DEFAULT TRUE
-        )
-    ''')
-    
-    # Analysis results cache table
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS analysis_cache (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            symbol TEXT NOT NULL,
-            interval_type TEXT NOT NULL,
-            asset_class TEXT NOT NULL,
-            analysis_data TEXT NOT NULL,
-            created_at DATETIME NOT NULL,
-            expires_at DATETIME NOT NULL
-        )
-    ''')
-    
-    # Create indexes for better performance
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_api_calls_provider_timestamp ON api_calls(provider, timestamp)')
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_watchlist_symbol ON watchlist(symbol)')
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_analysis_cache_lookup ON analysis_cache(symbol, interval_type, asset_class, expires_at)')
-    
-    conn.commit()
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
 
-def log_api_call(provider: str, endpoint: str = None, success: bool = True, error_message: str = None):
-    """Log an API call for rate limiting purposes"""
+# Database Models
+class Watchlist(Base):
+    __tablename__ = "watchlist"
+    
+    symbol = Column(String(20), primary_key=True)
+    asset_class = Column(String(10), nullable=False, default="stock")
+    added_at = Column(DateTime, default=datetime.utcnow)
+
+class AnalysisResult(Base):
+    __tablename__ = "analysis_results"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    symbol = Column(String(20), nullable=False, index=True)
+    result_data = Column(Text, nullable=False)  # JSON string
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+class APICall(Base):
+    __tablename__ = "api_calls"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    provider = Column(String(20), nullable=False, index=True)
+    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
+
+# Database initialization
+def init_db():
+    """Create all tables"""
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            INSERT INTO api_calls (provider, timestamp, endpoint, success, error_message)
-            VALUES (?, ?, ?, ?, ?)
-        ''', (provider, datetime.utcnow(), endpoint, success, error_message))
-        
-        conn.commit()
+        Base.metadata.create_all(bind=engine)
+        print("Database initialized successfully")
     except Exception as e:
-        print(f"Error logging API call: {e}")
+        print(f"Database initialization error: {e}")
+        raise
 
-def get_api_calls_in_last_minute(provider: str) -> int:
-    """Get the number of API calls made in the last minute for a provider"""
+# Database session context manager
+def get_db_session():
+    """Get database session with proper cleanup"""
+    session = SessionLocal()
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        one_minute_ago = datetime.utcnow() - timedelta(minutes=1)
-        
-        cursor.execute('''
-            SELECT COUNT(*) as count
-            FROM api_calls
-            WHERE provider = ? AND timestamp > ?
-        ''', (provider, one_minute_ago))
-        
-        result = cursor.fetchone()
-        return result['count'] if result else 0
+        yield session
     except Exception as e:
-        print(f"Error getting API call count: {e}")
-        return 0
+        session.rollback()
+        raise
+    finally:
+        session.close()
 
-def cleanup_old_api_calls():
-    """Clean up API call logs older than 24 hours"""
+# Watchlist operations
+def add_to_watchlist(symbol: str, asset_class: str = "stock") -> bool:
+    """Add symbol to watchlist"""
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        twenty_four_hours_ago = datetime.utcnow() - timedelta(hours=24)
-        
-        cursor.execute('''
-            DELETE FROM api_calls
-            WHERE timestamp < ?
-        ''', (twenty_four_hours_ago,))
-        
-        conn.commit()
-        print(f"Cleaned up {cursor.rowcount} old API call records")
-    except Exception as e:
-        print(f"Error cleaning up API calls: {e}")
-
-def add_to_watchlist(symbol: str, asset_class: str = 'stock') -> bool:
-    """Add a symbol to the watchlist"""
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            INSERT OR REPLACE INTO watchlist (symbol, asset_class, added_at, is_active)
-            VALUES (?, ?, ?, TRUE)
-        ''', (symbol.upper(), asset_class, datetime.utcnow()))
-        
-        conn.commit()
-        return True
+        with SessionLocal() as session:
+            # Check if already exists
+            existing = session.query(Watchlist).filter_by(symbol=symbol).first()
+            if existing:
+                return False
+            
+            watchlist_item = Watchlist(symbol=symbol, asset_class=asset_class)
+            session.add(watchlist_item)
+            session.commit()
+            return True
     except Exception as e:
         print(f"Error adding to watchlist: {e}")
         return False
 
-def remove_from_watchlist(symbol: str) -> bool:
-    """Remove a symbol from the watchlist"""
+def get_watchlist() -> List[Dict[str, Any]]:
+    """Get all watchlist items"""
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            UPDATE watchlist 
-            SET is_active = FALSE
-            WHERE symbol = ?
-        ''', (symbol.upper(),))
-        
-        conn.commit()
-        return cursor.rowcount > 0
-    except Exception as e:
-        print(f"Error removing from watchlist: {e}")
-        return False
-
-def get_watchlist() -> List[Dict]:
-    """Get all active watchlist items"""
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            SELECT symbol, asset_class, added_at
-            FROM watchlist
-            WHERE is_active = TRUE
-            ORDER BY added_at DESC
-        ''')
-        
-        return [dict(row) for row in cursor.fetchall()]
+        with SessionLocal() as session:
+            items = session.query(Watchlist).order_by(Watchlist.added_at.desc()).all()
+            return [
+                {
+                    "symbol": item.symbol,
+                    "asset_class": item.asset_class,
+                    "added_at": item.added_at.isoformat()
+                }
+                for item in items
+            ]
     except Exception as e:
         print(f"Error getting watchlist: {e}")
         return []
 
-def cache_analysis_result(symbol: str, interval_type: str, asset_class: str, analysis_data: str, ttl_minutes: int = 15):
-    """Cache analysis result with TTL"""
+def remove_from_watchlist(symbol: str) -> bool:
+    """Remove symbol from watchlist"""
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        expires_at = datetime.utcnow() + timedelta(minutes=ttl_minutes)
-        
-        cursor.execute('''
-            INSERT OR REPLACE INTO analysis_cache 
-            (symbol, interval_type, asset_class, analysis_data, created_at, expires_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (symbol.upper(), interval_type, asset_class, analysis_data, datetime.utcnow(), expires_at))
-        
-        conn.commit()
+        with SessionLocal() as session:
+            item = session.query(Watchlist).filter_by(symbol=symbol).first()
+            if not item:
+                return False
+            
+            session.delete(item)
+            session.commit()
+            return True
     except Exception as e:
-        print(f"Error caching analysis: {e}")
+        print(f"Error removing from watchlist: {e}")
+        return False
 
-def get_cached_analysis(symbol: str, interval_type: str, asset_class: str) -> Optional[str]:
-    """Get cached analysis result if not expired"""
+# Analysis results operations
+def save_analysis_result(symbol: str, result_data: Dict[str, Any]) -> bool:
+    """Save analysis result"""
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            SELECT analysis_data
-            FROM analysis_cache
-            WHERE symbol = ? AND interval_type = ? AND asset_class = ? 
-            AND expires_at > ?
-            ORDER BY created_at DESC
-            LIMIT 1
-        ''', (symbol.upper(), interval_type, asset_class, datetime.utcnow()))
-        
-        result = cursor.fetchone()
-        return result['analysis_data'] if result else None
+        with SessionLocal() as session:
+            analysis = AnalysisResult(
+                symbol=symbol,
+                result_data=json.dumps(result_data)
+            )
+            session.add(analysis)
+            session.commit()
+            return True
     except Exception as e:
-        print(f"Error getting cached analysis: {e}")
-        return None
+        print(f"Error saving analysis result: {e}")
+        return False
 
-def cleanup_expired_cache():
-    """Clean up expired cache entries"""
+def get_analysis_history(symbol: str, limit: int = 10) -> List[Dict[str, Any]]:
+    """Get analysis history for a symbol"""
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            DELETE FROM analysis_cache
-            WHERE expires_at < ?
-        ''', (datetime.utcnow(),))
-        
-        conn.commit()
-        print(f"Cleaned up {cursor.rowcount} expired cache entries")
+        with SessionLocal() as session:
+            results = (
+                session.query(AnalysisResult)
+                .filter_by(symbol=symbol)
+                .order_by(AnalysisResult.created_at.desc())
+                .limit(limit)
+                .all()
+            )
+            
+            return [
+                {
+                    "id": result.id,
+                    "symbol": result.symbol,
+                    "data": json.loads(result.result_data),
+                    "created_at": result.created_at.isoformat()
+                }
+                for result in results
+            ]
     except Exception as e:
-        print(f"Error cleaning up cache: {e}")
+        print(f"Error getting analysis history: {e}")
+        return []
 
-# Initialize database on import
-try:
-    init_database(get_db_connection())
-except Exception as e:
-    print(f"Error initializing database: {e}")
+# API call tracking operations
+def log_api_call(provider: str):
+    """Log an API call"""
+    try:
+        with SessionLocal() as session:
+            api_call = APICall(provider=provider)
+            session.add(api_call)
+            session.commit()
+    except Exception as e:
+        print(f"Error logging API call: {e}")
+
+def get_api_calls_in_last_minute(provider: str) -> int:
+    """Get number of API calls in the last minute for rate limiting"""
+    try:
+        one_minute_ago = datetime.utcnow() - timedelta(minutes=1)
+        
+        with SessionLocal() as session:
+            count = (
+                session.query(APICall)
+                .filter(
+                    APICall.provider == provider,
+                    APICall.timestamp >= one_minute_ago
+                )
+                .count()
+            )
+            return count
+    except Exception as e:
+        print(f"Error getting API call count: {e}")
+        return 0
+
+# Cleanup operations
+def cleanup_old_data():
+    """Clean up old data (run periodically)"""
+    try:
+        # Remove API call logs older than 24 hours
+        cutoff_time = datetime.utcnow() - timedelta(hours=24)
+        
+        with SessionLocal() as session:
+            deleted = (
+                session.query(APICall)
+                .filter(APICall.timestamp < cutoff_time)
+                .delete()
+            )
+            session.commit()
+            
+            if deleted > 0:
+                print(f"Cleaned up {deleted} old API call records")
+            
+    except Exception as e:
+        print(f"Error during cleanup: {e}")
+
+# Health check
+def check_db_health() -> bool:
+    """Check if database is accessible"""
+    try:
+        with SessionLocal() as session:
+            session.execute("SELECT 1")
+            return True
+    except Exception as e:
+        print(f"Database health check failed: {e}")
+        return False
