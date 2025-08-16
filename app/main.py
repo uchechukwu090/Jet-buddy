@@ -1,294 +1,273 @@
 # ==============================================================================
-# FILE: app/main.py
+# FILE: main.py
 # ==============================================================================
-# The main application file. It sets up the FastAPI server, defines API
-# endpoints, orchestrates the analysis pipeline and scheduling.
-# ==============================================================================
+# Main API entry point for JetBuddy trading analysis system
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from fastapi.concurrency import run_in_threadpool
-from contextlib import asynccontextmanager
-from datetime import datetime
-import os
+from pydantic import BaseModel
+from typing import Optional, Dict, List
 import json
+from datetime import datetime
 
-from typing import List, Optional
-
-from app.config import settings
-from app.models import AnalysisOutput, WatchlistAddItem, WatchlistItem
-from app.caching import init_cache, set_cached_analysis, get_cached_analysis
+# Import your modules
+from app.modules.aggregator import aggregate_signals, aggregate_trade_signal
+from app.modules.trend_engine import analyze_trend
+from app.modules.sentiment_engine import analyze_sentiment
+from app.modules.smc_engine import analyze_smc_structure
+from app.modules.time_engine import estimate_time_and_volatility
+from app.modules.risk_engine import get_position_size
+from app.modules.data_fetcher import get_ohlcv_data
+from app.symbol_normalizer import normalize_symbol, AssetClass, Provider, detect_asset_class
 from app.database import (
-    init_db,
-    add_to_watchlist,
-    remove_from_watchlist,
-    get_full_watchlist,
-    get_unique_symbols_from_watchlist,
-    get_emails_for_symbol,
+    add_to_watchlist, remove_from_watchlist, get_watchlist,
+    cache_analysis_result, get_cached_analysis,
+    cleanup_old_api_calls, cleanup_expired_cache
 )
-from app.symbol_normalizer import normalize_symbol, AssetClass, Provider
-from app.email_sender import send_email_report
-from app.modules import (
-    data_fetcher,
-    trend_engine,
-    smc_engine,
-    sentiment_engine,
-    tp_engine,
-    time_engine,
-    aggregator,
-    risk_engine,
+from app.config import settings
+
+app = FastAPI(
+    title="JetBuddy Trading Analysis API",
+    description="Advanced multi-engine trading signal analysis system",
+    version="1.0.0"
 )
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-# ------------------------------------------------------------------------------
-# Analysis Pipeline
-# ------------------------------------------------------------------------------
-def run_full_analysis(
-    symbol: str,
-    asset: AssetClass = AssetClass.STOCK,
-    provider: Provider = Provider.FINNHUB
-):
-    # 1) Normalize symbol for the chosen asset + provider
-    norm = normalize_symbol(symbol, asset=asset, provider=provider)
-    print(f"[{datetime.now()}] Running full analysis for {norm} (original: {symbol})…")
-
-    # 2) Attempt primary provider
-    used_provider = provider
-    try:
-        ohlcv_df, source = data_fetcher.get_ohlcv_data(
-            symbol,
-            interval="15min",
-            output_size=200,
-            asset=asset,
-            provider=used_provider,
-        )
-        # raise if provider returned a None or empty DataFrame
-        if ohlcv_df is None or ohlcv_df.empty:
-            raise ValueError(f"No data from {used_provider}")
-    except Exception as primary_exc:
-        # Only fallback if primary was Finnhub
-        if provider == Provider.FINNHUB:
-            print(f"{provider.value.capitalize()} failed ({primary_exc}). Falling back to Twelve Data.")
-            used_provider = Provider.TWELVEDATA
-            ohlcv_df, source = data_fetcher.get_ohlcv_data(
-                symbol,
-                interval="15min",
-                output_size=200,
-                asset=asset,
-                provider=used_provider,
-            )
-            if ohlcv_df is None or ohlcv_df.empty:
-                raise HTTPException(
-                    status_code=502,
-                    detail=f"No data from fallback provider ({used_provider.value})."
-                )
-        else:
-            # If primary wasn’t Finnhub (e.g. you explicitly asked for Twelve Data) rethrow
-            raise HTTPException(
-                status_code=502,
-                detail=f"Data fetch error from {used_provider.value}: {primary_exc}"
-            )
-
-    # 3) Core analysis on the fetched DataFrame
-    trend_result = trend_engine.get_bias(ohlcv_df)
-    structure    = smc_engine.get_structure(ohlcv_df)
-    sentiment    = sentiment_engine.get_confidence(norm)
-    entry_price  = structure.get("key_level", ohlcv_df["close"].iloc[-1])
-    time_res     = time_engine.estimate_entry_and_tp_time(ohlcv_df)
-    risk_res     = risk_engine.calculate_risk(entry_price, structure)
-    tp_data      = tp_engine.generate_tp_prediction(trend_result, structure, sentiment)
-    sl_level     = tp_data.get("sl_level")
-
-    # 4) Assemble the signal
-    signal = {
-        "symbol": norm,
-        "provider": used_provider.value,
-        "source": source,
-        "trend_direction": trend_result.get("trend_direction", "N/A"),
-        "sentiment": sentiment.get("sentiment", "N/A"),
-        "bias_confidence": tp_data.get("bias_confidence", 0.0),
-        "entry_price": entry_price,
-        "entry_zone": time_res.get("best_entry_zone", "N/A"),
-        "estimated_entry_time": time_res.get("estimated_entry_time", "N/A"),
-        "tp_eta": time_res.get("tp_eta", "N/A"),
-        "tp_zone": tp_data.get("tp_zone", "N/A"),
-        "tp_levels": tp_data.get("levels", []),
-        "sl_level": sl_level,
-        "risk_profile": risk_res.get("risk_profile", "N/A"),
-        "suggested_lot_size": risk_res.get("suggested_lot_size", 0.0),
-        "status": "ok",
-        "error_message": None,
-    }
-
-    # 5) Cache & send email
-    set_cached_analysis(norm, signal)
-    send_email_report(norm, signal)
-
-    return signal
-
-
-# ------------------------------------------------------------------------------
-# Scheduler Setup
-# ------------------------------------------------------------------------------
-scheduler = AsyncIOScheduler(timezone="UTC")
-
-
-def scheduled_analysis_job():
-    print("Scheduler triggered: Starting analysis for all watchlist symbols.")
-    symbols = get_unique_symbols_from_watchlist()
-    if not symbols:
-        print("Watchlist is empty. Skipping scheduled run.")
-        return
-    for sym in symbols:
-        run_full_analysis(sym)
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    init_db()
-    init_cache()
-    print("Starting Jet Buddy Engine…")
-    scheduler.add_job(scheduled_analysis_job, "cron", hour=6, minute=55, id="pre_london")
-    scheduler.add_job(scheduled_analysis_job, "cron", hour=12, minute=55, id="pre_ny")
-    scheduler.add_job(scheduled_analysis_job, "cron", hour=22, minute=55, id="pre_asian")
-    scheduler.start()
-    print("Scheduler started with cron jobs (UTC).")
-    yield
-    scheduler.shutdown()
-
-
-app = FastAPI(lifespan=lifespan, title="Jet Buddy Trading Engine")
-
-
-# ------------------------------------------------------------------------------
-# CORS Setup
-# ------------------------------------------------------------------------------
-def get_cors_origins() -> List[str]:
-    origins = os.getenv("CORS_ALLOW_ORIGINS", "*")
-    return [o.strip() for o in origins.split(",")]
-
-ALLOWED_ORIGINS = [
-    "https://9fcb73c8-5bbb-4200-a5b9-3f3dd8635e07.canvases.tempo.build",
-    "http://localhost:5173",
-    "http://localhost:3000",
-    # add any other frontends you use
-]
-
+# CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
-    allow_credentials=False,  # keep false if you aren’t sending cookies/auth
+    allow_origins=["*"],  # In production, specify your frontend domain
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# Pydantic models
+class AnalysisRequest(BaseModel):
+    interval: str = "15min"
+    asset_class: str = "stock"
+    risk_tier: str = "medium"
 
-# ------------------------------------------------------------------------------
-# Endpoints
-# ------------------------------------------------------------------------------
+class WatchlistItem(BaseModel):
+    symbol: str
+    asset_class: str = "stock"
+
+class WatchlistRemove(BaseModel):
+    symbol: str
+
+# Background task to cleanup old data
+def cleanup_background():
+    cleanup_old_api_calls()
+    cleanup_expired_cache()
+
+@app.on_event("startup")
+async def startup_event():
+    print("JetBuddy API starting up...")
+    cleanup_background()
+
 @app.get("/")
-def root():
-    return {"status": "Jet Buddy is running!"}
+async def root():
+    return {
+        "message": "JetBuddy Trading Analysis API",
+        "version": "1.0.0",
+        "status": "operational"
+    }
 
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
 
-@app.get("/analyze/{symbol}", response_model=AnalysisOutput, tags=["Analysis"])
-async def get_analysis(symbol: str, background_tasks: BackgroundTasks):
-    symbol = symbol.upper()
-    cached = get_cached_analysis(symbol)
-
-    if cached:
-        if cached.get("status") == "error":
-            raise HTTPException(status_code=500, detail=cached.get("error_message"))
-        return AnalysisOutput(**cached)
-
-    background_tasks.add_task(run_full_analysis, symbol)
-    raise HTTPException(
-        status_code=202,
-        detail=(
-            f"Analysis for {symbol} is being processed. "
-            "Please retry in a few minutes."
-        ),
-    )
-
-
-@app.post("/watchlist/add", status_code=201, tags=["Watchlist"])
-async def add_symbol_to_watchlist(item: WatchlistAddItem, background_tasks: BackgroundTasks):
-    normalized = normalize_symbol(item.symbol)
-    add_to_watchlist(item.symbol, normalized, item.email)
-    background_tasks.add_task(run_full_analysis, normalized)
-    msg = f"Added '{item.symbol}' (normalized to '{normalized}') to watchlist."
-    if item.email:
-        msg += f" Alerts will be sent to {item.email}."
-    return {"message": msg}
-
-@app.get("/watchlist", response_model=List[WatchlistItem], tags=["Watchlist"])
-def get_watchlist():
-    return get_full_watchlist()
-
-
-@app.delete("/watchlist/remove/{item_id}", status_code=200, tags=["Watchlist"])
-def remove_symbol_from_watchlist(item_id: int):
-    remove_from_watchlist(item_id)
-    return {"message": f"Item {item_id} removed from watchlist."}
-
-
-@app.get("/market-data/{symbol}", tags=["On-Demand Data"])
-async def get_market_data(symbol: str):
-    norm = normalize_symbol(symbol)
+@app.get("/watchlist")
+async def get_watchlist_items():
+    """Get all watchlist items"""
     try:
-        df, note = data_fetcher.get_ohlcv_data(norm)
-        if df is None:
-            raise HTTPException(status_code=404, detail=f"No market data for '{norm}'.")
-        records = json.loads(df.reset_index().to_json(orient="records", date_format="iso"))
-        return {"symbol": norm, "source": note, "data": records}
+        watchlist = get_watchlist()
+        return watchlist
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/watchlist/add")
+async def add_watchlist_item(item: WatchlistItem):
+    """Add item to watchlist"""
+    try:
+        success = add_to_watchlist(item.symbol.upper(), item.asset_class)
+        if success:
+            return {"message": f"Added {item.symbol} to watchlist", "success": True}
+        else:
+            raise HTTPException(status_code=400, detail="Failed to add to watchlist")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/sentiment/{symbol}", tags=["On-Demand Data"])
+@app.post("/watchlist/remove")
+async def remove_watchlist_item(item: WatchlistRemove):
+    """Remove item from watchlist"""
+    try:
+        success = remove_from_watchlist(item.symbol.upper())
+        if success:
+            return {"message": f"Removed {item.symbol} from watchlist", "success": True}
+        else:
+            raise HTTPException(status_code=404, detail="Symbol not found in watchlist")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/sentiment/{symbol}")
 async def get_sentiment(symbol: str):
-    norm = normalize_symbol(symbol)
+    """Get sentiment analysis for a symbol"""
     try:
-        res = sentiment_engine.analyze_sentiment(norm)
-        if res.get("error"):
-            raise HTTPException(status_code=500, detail=res["error"])
-        return {
-            "symbol": norm,
-            "dominant_sentiment": res.get("sentiment"),
-            "confidence": res.get("confidence"),
-            "source": "Newsdata.io + LLM/Keyword analysis",
+        sentiment = analyze_sentiment(symbol.upper())
+        return sentiment
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Sentiment analysis failed: {str(e)}")
+
+@app.post("/analyze/force-run/{symbol}")
+async def force_analysis(
+    symbol: str, 
+    request: AnalysisRequest,
+    background_tasks: BackgroundTasks
+):
+    """Force run complete analysis for a symbol"""
+    try:
+        symbol = symbol.upper()
+        
+        # Check cache first
+        cache_key = f"{symbol}_{request.interval}_{request.asset_class}"
+        cached_result = get_cached_analysis(symbol, request.interval, request.asset_class)
+        
+        if cached_result:
+            try:
+                return json.loads(cached_result)
+            except:
+                pass  # If cache is corrupted, continue with fresh analysis
+        
+        # Detect asset class if auto
+        asset_class_enum = AssetClass(request.asset_class)
+        if request.asset_class == "auto":
+            asset_class_enum = detect_asset_class(symbol)
+        
+        # Get OHLCV data
+        ohlcv_data, data_source = get_ohlcv_data(
+            symbol=symbol,
+            interval=request.interval,
+            output_size=200,
+            asset=asset_class_enum,
+            provider=Provider.FINNHUB
+        )
+        
+        if ohlcv_data is None:
+            raise HTTPException(status_code=404, detail="Unable to fetch market data for symbol")
+        
+        # Run all analysis engines
+        trend_analysis = analyze_trend(ohlcv_data)
+        sentiment_analysis = analyze_sentiment(symbol)
+        smc_analysis = analyze_smc_structure(ohlcv_data)
+        
+        # Aggregate signals
+        aggregated = aggregate_signals(trend_analysis, sentiment_analysis, smc_analysis)
+        
+        # Get time and volatility estimates
+        time_analysis = estimate_time_and_volatility(ohlcv_data, None)
+        
+        # Get risk management recommendations
+        risk_analysis = get_position_size(
+            aggregated['bias_confidence'], 
+            time_analysis.get('volatility', 'moderate'),
+            request.risk_tier
+        )
+        
+        # Prepare trade signal data
+        trade_data = {
+            'symbol': symbol,
+            'bias': aggregated['final_bias'],
+            'confidence': aggregated['bias_confidence'],
+            'structure': smc_analysis,
+            'momentum': 1.0,
+            'risk_ratio': 2.0
         }
+        
+        # Generate trade signal with TP/SL
+        trade_signal = aggregate_trade_signal(trade_data)
+        
+        # Compile final result
+        result = {
+            'symbol': symbol,
+            'timestamp': datetime.utcnow().isoformat(),
+            'data_source': data_source,
+            'bias': aggregated['final_bias'],
+            'confidence': aggregated['bias_confidence'],
+            'entry_price': ohlcv_data['close'].iloc[-1],
+            'tp_zone': trade_signal.get('tp_zone'),
+            'tp_levels': trade_signal.get('tp_levels', []),
+            'sl_level': trade_signal.get('sl_level'),
+            'trend': trend_analysis,
+            'sentiment': sentiment_analysis,
+            'structure': smc_analysis,
+            'time': time_analysis,
+            'risk': risk_analysis,
+            'aggregated_scores': aggregated.get('component_scores', {}),
+            'interval': request.interval,
+            'asset_class': request.asset_class
+        }
+        
+        # Cache the result
+        background_tasks.add_task(
+            cache_analysis_result,
+            symbol, 
+            request.interval, 
+            request.asset_class, 
+            json.dumps(result),
+            15  # 15 minutes TTL
+        )
+        
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Analysis error for {symbol}: {e}")
+        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
+
+@app.get("/analyze/{symbol}")
+async def get_analysis(
+    symbol: str,
+    interval: str = "15min",
+    asset_class: str = "stock",
+    risk_tier: str = "medium"
+):
+    """Get cached analysis or return basic info"""
+    try:
+        cached_result = get_cached_analysis(symbol.upper(), interval, asset_class)
+        if cached_result:
+            return json.loads(cached_result)
+        else:
+            return {
+                "message": "No cached analysis found. Use /analyze/force-run/{symbol} to generate new analysis.",
+                "symbol": symbol.upper(),
+                "cached": False
+            }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
-def infer_asset(symbol: str) -> AssetClass:
-    s = symbol.upper()
-    if "/" in s:
-        return AssetClass.FX
-    if any(k in s for k in ("BTC", "ETH", "SOL", "USDT")):
-        return AssetClass.CRYPTO
-    return AssetClass.STOCK
-
-@app.post("/analyze/force-run/{symbol}", response_model=AnalysisOutput, tags=["Analysis"])
-def force_run_analysis(
-    symbol: str,
-    asset: AssetClass | None = None,
-    provider: Provider = Provider.FINNHUB
-):
-    return run_full_analysis(symbol, asset=asset or infer_asset(symbol), provider=provider)
-
-
-@app.get("/health/cache", tags=["Health"])
-def check_cache():
+@app.get("/symbols/supported/{provider}/{asset_class}")
+async def get_supported_symbols(provider: str, asset_class: str):
+    """Get supported symbols for a provider and asset class combination"""
     try:
-        init_cache()
-        return {"status": "ok", "message": "Cache initialized successfully."}
+        from app.symbol_normalizer import get_supported_symbols
+        
+        provider_enum = Provider(provider.lower())
+        asset_enum = AssetClass(asset_class.lower())
+        
+        symbols = get_supported_symbols(provider_enum, asset_enum)
+        return {"symbols": symbols, "count": len(symbols)}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid provider or asset class: {str(e)}")
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/maintenance/cleanup")
+async def manual_cleanup(background_tasks: BackgroundTasks):
+    """Manually trigger cleanup of old data"""
+    background_tasks.add_task(cleanup_background)
+    return {"message": "Cleanup task queued"}
 
-@app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception):
-    return JSONResponse(status_code=500, content={"detail": "An unexpected error occurred."})
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
