@@ -1,66 +1,61 @@
 # ==============================================================================
-# FILE: app/config.py
+# FILE: app/config.py - POSTGRES VERSION
 # ==============================================================================
-# Configuration settings for the JetBuddy trading analysis system
+# Configuration settings for the trading analysis API
 
 import os
-from typing import Dict
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 class Settings:
+    """Application settings"""
+    
+    # Database Configuration (Neon/Postgres)
+    database_url: str = os.getenv("DATABASE_URL", "postgresql://localhost/trading_analysis")
+    
+    # API Keys
+    finnhub_api_key: str = os.getenv("FINNHUB_API_KEY", "")
+    twelvedata_api_key: str = os.getenv("TWELVEDATA_API_KEY", "")
+    newsdata_api_key: str = os.getenv("NEWSDATA_API_KEY", "")
+    openrouter_api_key: str = os.getenv("OPENROUTER_API_KEY", "")
+    
+    # Rate Limits (calls per minute)
+    rate_limits = {
+        "finnhub": 60,
+        "twelvedata": 8,  # Free tier limit
+        "newsdata": 200,
+        "openrouter": 100
+    }
+    
+    # Application Settings
+    app_name: str = "Trading Analysis API"
+    debug: bool = os.getenv("DEBUG", "False").lower() == "true"
+    
+    # CORS Settings
+    allowed_origins = [
+        "http://localhost:3000",
+        "http://localhost:8000",
+        "https://your-frontend-domain.com"  # Update with your frontend domain
+    ]
+    
     def __init__(self):
-        # API Keys
-        self.finnhub_api_key = os.getenv('FINNHUB_API_KEY', '')
-        self.twelvedata_api_key = os.getenv('TWELVEDATA_API_KEY', '')
-        self.newsdata_api_key = os.getenv('NEWSDATA_API_KEY', '')
-        self.openrouter_api_key = os.getenv('OPENROUTER_API_KEY', '')
+        # Validate required API keys
+        missing_keys = []
+        if not self.finnhub_api_key:
+            missing_keys.append("FINNHUB_API_KEY")
+        if not self.twelvedata_api_key:
+            missing_keys.append("TWELVEDATA_API_KEY")
         
-        # Rate Limits (requests per minute)
-        self.rate_limits = {
-            'finnhub': 60,
-            'twelvedata': 800,  # Free tier limit
-            'newsdata': 200,
-            'openrouter': 100
-        }
+        if missing_keys:
+            print(f"Warning: Missing API keys: {', '.join(missing_keys)}")
         
-        # Database settings
-        self.database_url = os.getenv('DATABASE_URL', 'sqlite:///jetbuddy.db')
+        # Validate database URL
+        if not self.database_url:
+            raise ValueError("DATABASE_URL is required")
         
-        # Default analysis parameters
-        self.default_interval = '15min'
-        self.default_output_size = 200
-        self.default_risk_tier = 'medium'
-        
-        # SMC Analysis settings
-        self.smc_swing_window = 5
-        self.min_data_points = 25
-        
-        # Sentiment analysis settings
-        self.max_headlines = 10
-        self.sentiment_model = "mistralai/mistral-7b-instruct:free"
-        
-        # Risk management settings
-        self.default_risk_ratio = 2.0
-        self.position_size_tiers = {
-            'conservative': 0.01,
-            'medium': 0.10,
-            'aggressive': 1.00
-        }
-        
-        # Time analysis settings
-        self.candle_interval_minutes = {
-            '15min': 15,
-            '1h': 60,
-            '1day': 1440
-        }
+        print(f"Database URL configured: {self.database_url[:30]}...")
 
-    def get_rate_limit(self, provider: str) -> int:
-        return self.rate_limits.get(provider, 60)
-    
-    def get_position_size(self, tier: str) -> float:
-        return self.position_size_tiers.get(tier, 0.10)
-    
-    def get_candle_minutes(self, interval: str) -> int:
-        return self.candle_interval_minutes.get(interval, 15)
-
-# Global settings instance
+# Create global settings instance
 settings = Settings()
